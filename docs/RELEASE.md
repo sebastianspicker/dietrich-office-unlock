@@ -7,21 +7,22 @@ PyPI publishing workflow is defined.
 
 ## Automated checks
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs four independent
-lanes on Ubuntu:
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs three independent
+lanes on Ubuntu with Python 3.12:
 
 - **Static** — locked dependency validation, Ruff lint and format, and Pyright,
   once.
-- **Behavioral tests** — Python 3.11, 3.12, and 3.13 with all package extras.
 - **Packaging** — one offline build, archive-boundary and six-stylesheet checks,
-  then separate clean wheel and source-distribution installations. All three
+  then separate clean wheel and source-distribution installations. All four
   console entry points run from outside the checkout.
-- **Demo** — JavaScript syntax, fixture-only static contracts, and local Chromium
-  interactions through the dedicated `demo` dependency group. This lane also
-  syntax-checks the graphical assets and runs the GUI browser tests.
+- **Demo** — JavaScript syntax checks for the static demo and the graphical
+  interface assets.
+
+The behavioral test suite is maintained locally and is not part of the
+repository or CI.
 
 The workflow runs for pull requests, manual dispatches, and pushes to `main` or
-`master`. The source distribution includes maintained source, tests, docs,
+`master`. The source distribution includes maintained source, docs,
 examples, brand assets, validation scripts, and the demo with its screenshot
 tour. `.impeccable`, design studies, generated captures, caches, and the removed
 v2 copy are excluded by its explicit include boundary.

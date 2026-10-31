@@ -315,7 +315,9 @@ def export_hash_line(path: Path, fmt: str = "hashcat") -> str:
     """Export a real office2john / hashcat-compatible Office hash line.
 
     Format (Agile):
-      [name:]$office${2010|2013}{spin}{keyBits}{saltSize}{salt}{encVerifier}*{encVerifierHash32}
+      [name:]$office$*{2010|2013}*{spin}*{keyBits}*{saltSize}*{salt}*{encVerifier}*{encVerifierHash32}
+    Format (Standard):
+      [name:]$office$*2007*{verifierHashSize}*{keySize}*{saltSize}*{salt}*{encVerifier}*{encVerifierHash}
 
     hashcat modes: 9600 (2013/SHA512), 9500 (2010/SHA1), 9400 (2007).
     """
@@ -377,7 +379,7 @@ def _agile_hash_body(info: dict) -> str:
     encrypted_verifier = bytes(info["encryptedVerifierHashInput"])
     encrypted_hash = bytes(info["encryptedVerifierHashValue"])
     return (
-        f"$office${version}{spin}{key_bits}{len(salt)}*"
+        f"$office$*{version}*{spin}*{key_bits}*{len(salt)}*"
         f"{binascii.hexlify(salt).decode('ascii')}*"
         f"{binascii.hexlify(encrypted_verifier).decode('ascii')}*"
         f"{binascii.hexlify(encrypted_hash[:32]).decode('ascii')}"
@@ -394,7 +396,7 @@ def _agile_hash_version(algorithm: str) -> int:
 
 
 def _export_standard_hash_from_ole(path: Path) -> str:
-    """Parse ECMA-376 Standard / Office 2007 EncryptionInfo (office2john layout)."""
+    """Read ECMA-376 Standard / Office 2007 EncryptionInfo and format its hash line."""
     import olefile
 
     from dietrich.safety.cfb import validate_cfb
@@ -409,45 +411,58 @@ def _export_standard_hash_from_ole(path: Path) -> str:
     with olefile.OleFileIO(str(path)) as ole:
         if not ole.exists("EncryptionInfo"):
             raise EncryptedDocumentError(f"{path.name}: no EncryptionInfo stream")
-        stream = ole.openstream("EncryptionInfo")
-        major = struct.unpack("<H", stream.read(2))[0]
-        minor = struct.unpack("<H", stream.read(2))[0]
-        flags = struct.unpack("<I", stream.read(4))[0]
-        del flags
-        # Agile is major=4,minor=4 - should not reach here for agile
-        if major == 4 and minor == 4:
-            raise EncryptedDocumentError(
-                f"{path.name}: EncryptionInfo looks Agile; use Agile export path"
-            )
-        header_length = struct.unpack("<I", stream.read(4))[0]
-        # skipFlags
-        stream.read(4)
-        header_length -= 4
-        stream.read(4)  # sizeExtra
-        header_length -= 4
-        stream.read(4)  # algId
-        header_length -= 4
-        stream.read(4)  # algHashId
-        header_length -= 4
-        key_size = struct.unpack("<I", stream.read(4))[0]
-        header_length -= 4
-        stream.read(4)  # providerType
-        header_length -= 4
-        stream.read(4)  # unused
-        header_length -= 4
-        stream.read(4)  # unused
-        header_length -= 4
-        if header_length > 0:
-            stream.read(header_length)  # CSPName
-        salt_size = struct.unpack("<I", stream.read(4))[0]
-        salt = stream.read(salt_size)
-        encrypted_verifier = stream.read(16)
-        verifier_hash_size = struct.unpack("<I", stream.read(4))[0]
-        encrypted_verifier_hash = stream.read(verifier_hash_size)
+        # validate_cfb has already bounded every stream to MAX_CFB_STREAM_BYTES.
+        data = ole.openstream("EncryptionInfo").read()
+    return _standard_hash_body(data, path.name)
+
+
+_STANDARD_HEADER_FIXED_BYTES = 32
+_STANDARD_SALT_BYTES = 16
+_STANDARD_VERIFIER_BYTES = 16
+
+
+def _standard_hash_body(data: bytes, name: str) -> str:
+    """Format Standard EncryptionInfo bytes (office2john layout), checking every declared length."""
+    major, minor = struct.unpack("<HH", _take(data, 0, 4, name))
+    offset = 8  # version + flags
+    if major == 4 and minor == 4:
+        raise EncryptedDocumentError(f"{name}: EncryptionInfo looks Agile; use Agile export path")
+    header_length = _take_u32(data, offset, name)
+    offset += 4
+    if header_length < _STANDARD_HEADER_FIXED_BYTES:
+        raise EncryptedDocumentError(f"{name}: EncryptionInfo header is too short")
+    header = _take(data, offset, header_length, name)
+    offset += header_length
+    key_size = struct.unpack_from("<I", header, 16)[0]
+    salt_size = _take_u32(data, offset, name)
+    offset += 4
+    if salt_size != _STANDARD_SALT_BYTES:
+        raise EncryptedDocumentError(f"{name}: EncryptionInfo declares an invalid salt size")
+    salt = _take(data, offset, salt_size, name)
+    offset += salt_size
+    encrypted_verifier = _take(data, offset, _STANDARD_VERIFIER_BYTES, name)
+    offset += _STANDARD_VERIFIER_BYTES
+    verifier_hash_size = _take_u32(data, offset, name)
+    offset += 4
+    encrypted_verifier_hash = _take(data, offset, verifier_hash_size, name)
 
     return (
-        f"$office$2007{verifier_hash_size}{key_size}{salt_size}*"
+        f"$office$*2007*{verifier_hash_size}*{key_size}*{salt_size}*"
         f"{binascii.hexlify(salt).decode('ascii')}*"
         f"{binascii.hexlify(encrypted_verifier).decode('ascii')}*"
         f"{binascii.hexlify(encrypted_verifier_hash)[:64].decode('ascii')}"
     )
+
+
+def _take(data: bytes, offset: int, size: int, name: str) -> bytes:
+    """Return exactly ``size`` bytes at ``offset`` or reject a truncated declaration."""
+    if size < 0 or offset + size > len(data):
+        raise EncryptedDocumentError(
+            f"{name}: EncryptionInfo is truncated or declares an invalid length"
+        )
+    return data[offset : offset + size]
+
+
+def _take_u32(data: bytes, offset: int, name: str) -> int:
+    """Read one little-endian 32-bit field with the same truncation check."""
+    return struct.unpack("<I", _take(data, offset, 4, name))[0]

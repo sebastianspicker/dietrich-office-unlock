@@ -13,7 +13,8 @@ tests need:
 uv sync --locked --all-extras --group demo
 ```
 
-CI covers Python 3.11, 3.12, and 3.13 on Ubuntu. Do not update `uv.lock` as a
+CI runs on Python 3.12 on Ubuntu; 3.11 to 3.13 are supported. `.python-version`
+pins local development to 3.12 to match CI. Do not update `uv.lock` as a
 side effect of an unrelated change.
 
 ## Make a change

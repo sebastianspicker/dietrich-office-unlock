@@ -317,11 +317,11 @@ def _password_after_prefixed_hash(
 def suggest_mode_from_hash(hash_line: str) -> int:
     """Guess hashcat mode from exported hash body."""
     body = normalize_hash_body(hash_line)
-    if body.startswith("$office$2013"):
+    if body.startswith("$office$*2013*"):
         return 9600
-    if body.startswith("$office$2010"):
+    if body.startswith("$office$*2010*"):
         return 9500
-    if body.startswith("$office$2007"):
+    if body.startswith("$office$*2007*"):
         return 9400
     if body.startswith("$pdf$"):
         m = re.match(r"\$pdf\$(\d+)\*(\d+)\*", body)

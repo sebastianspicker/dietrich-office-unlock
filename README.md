@@ -56,9 +56,13 @@ coverage.
 
 ## Requirements
 
-- Python 3.11 or later. CI covers 3.11, 3.12, and 3.13 on Ubuntu.
+- Python 3.11 to 3.13. CI runs its checks on Python 3.12 on Ubuntu.
 - Optional Python dependencies for the features you use:
   `msoffcrypto-tool`, `pikepdf`, `olefile`, `cryptography`, and `textual`.
+  The tested versions are the ones locked in `uv.lock` (currently
+  msoffcrypto-tool 6.0.0, pikepdf 10.11.0, olefile 0.47, cryptography 50.0.0,
+  lxml 6.1.1, textual 8.2.8). Older versions that the declared minimums in
+  `pyproject.toml` still allow are not tested.
 - A separately installed `hashcat` executable on `PATH` for `--hashcat`.
 
 ## Install

@@ -150,7 +150,14 @@ def _run_parallel_file_attack(
     """Verify in spawn workers with a bounded candidate submission window."""
     context = multiprocessing.get_context("spawn")
     manager = SyncManager(ctx=context, shutdown_timeout=_WORKER_GRACE_SECONDS)
-    manager.start()
+    try:
+        manager.start()
+    except (EOFError, OSError) as exc:
+        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        raise EncryptedDocumentError(
+            "parallel password search could not start its local worker manager "
+            f"({detail}). Retry with a single worker (--workers 1)."
+        ) from exc
     task_queue = None
     processes: list[BaseProcess] = []
     dispatched = 0
