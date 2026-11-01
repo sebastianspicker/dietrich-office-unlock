@@ -51,6 +51,10 @@ signature impersonation, document exploits, or remote password-cracking services
 
 ## Verify
 
+CI runs automatically only for pull requests authored by `dependabot[bot]`; other changes
+can use **Run workflow** after local verification. Pages publishing requires a separate
+manual run on `main`; see [release and distribution](docs/RELEASE.md).
+
 Run from the repository root:
 
 ```bash

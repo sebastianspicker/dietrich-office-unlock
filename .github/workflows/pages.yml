@@ -1,12 +1,6 @@
 name: Deploy Instrument Workbench demo to Pages
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "site/**"
-      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -52,6 +46,7 @@ jobs:
           fi
 
   upload:
+    if: github.ref == 'refs/heads/main'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -73,6 +68,7 @@ jobs:
           path: pages-dist
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: upload
     runs-on: ubuntu-latest
     timeout-minutes: 5

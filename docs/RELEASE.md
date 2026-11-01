@@ -1,9 +1,9 @@
 # Release and distribution
 
 Dietrich 0.4.0a5 is classified as Alpha in `pyproject.toml`. Hatchling builds a
-single local Python package with `dietrich`, `dietrich-tui`, and `dietrich-gui`
-console entry points. Release publication is a maintainer-operated process; no
-PyPI publishing workflow is defined.
+single local Python package with `dietrich`, `dietrich-tui`, `dietrich-gui`,
+and `dietrich-research` console entry points. Release publication is a
+maintainer-operated process; no PyPI publishing workflow is defined.
 
 ## Automated checks
 
@@ -21,9 +21,10 @@ lanes on Ubuntu with Python 3.12:
 The behavioral test suite is maintained locally and is not part of the
 repository or CI.
 
-The workflow runs for pull requests, manual dispatches, and pushes to `main` or
-`master`. The source distribution includes maintained source, docs,
-examples, brand assets, validation scripts, and the demo with its screenshot
+The workflow runs automatically only for pull requests authored by
+`dependabot[bot]`, or through an explicit manual dispatch. Ordinary pushes, tags and
+other pull requests do not run these jobs. The source distribution includes
+maintained source, docs, examples, brand assets, validation scripts, and the demo with its screenshot
 tour. `.impeccable`, design studies, generated captures, caches, and the removed
 v2 copy are excluded by its explicit include boundary.
 
@@ -53,9 +54,10 @@ runtime, or `hashcat` installer.
 ## Static demo deployment
 
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) deploys the
-separate Instrument Workbench demo to GitHub Pages from `main` or a manual
-dispatch. Before the first deployment, set the repository's Pages source to
-GitHub Actions and restrict the `github-pages` environment to `main`.
+separate Instrument Workbench demo to GitHub Pages only after a manual dispatch
+on `main`; pushes and pull requests never deploy it. Before the first deployment,
+set the repository's Pages source to GitHub Actions and restrict the
+`github-pages` environment to `main`.
 
 The workflow rejects external runtime assets and browser network, storage, or
 file-picker APIs. It stages only:

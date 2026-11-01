@@ -7,6 +7,22 @@ modify. It inspects protection in Microsoft Office and PDF files, removes
 supported non-cryptographic restrictions, and recovers open passwords — all
 without sending your files anywhere.
 
+<details>
+<summary>Status and limitations</summary>
+
+Dietrich is independently developed experimental document-recovery software. Developed
+independently alongside my main professional work. Version 0.4.0a5 is an alpha: commands,
+Python APIs and output formats may change. Its format-specific capabilities and
+experimental operations are a foundation to review and test against your own documents,
+rather than a ready-to-use recovery service.
+
+**Disclaimer.** Use only documents you own or are authorized to inspect and modify.
+Password-recovery and restriction-removal features grant no permission to access someone
+else's files. Keep independent originals and verify output in the intended Office or PDF
+viewer; you are responsible for its use.
+
+</details>
+
 [![CI](https://github.com/sebastianspicker/dietrich-office-unlock/actions/workflows/ci.yml/badge.svg)](https://github.com/sebastianspicker/dietrich-office-unlock/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -14,9 +30,6 @@ without sending your files anywhere.
 
 You get a command-line interface, a local graphical interface, an optional
 Textual terminal interface, and a small Python API.
-
-> **0.4.0a5 is an alpha release.** Commands, Python APIs, and output formats can
-> still change before a stable release.
 
 ## Screenshot tour
 
@@ -40,6 +53,18 @@ upload, inspect, or change files, and it never runs Dietrich.
 
 ## What Dietrich does
 
+For supported restriction removal, the default workflow keeps the original separate:
+
+```mermaid
+flowchart LR
+  A[Authorized document] --> B[Inspect restrictions]
+  B --> C[Create working copy]
+  C --> D[Validate file structure]
+  D --> E[Save separate output]
+```
+
+Format validation does not replace checking the result in your Office or PDF viewer.
+
 - Inspects OOXML, encrypted Office, legacy binary Office, and PDF inputs.
 - Removes supported worksheet, workbook, document, presentation, and PDF
   permission restrictions.
@@ -56,13 +81,15 @@ coverage.
 
 ## Requirements
 
-- Python 3.11 to 3.13. CI runs its checks on Python 3.12 on Ubuntu.
+- Python 3.11 to 3.13. CI uses Python 3.12 on Ubuntu for Dependabot pull requests
+  or explicit manual runs.
 - Optional Python dependencies for the features you use:
   `msoffcrypto-tool`, `pikepdf`, `olefile`, `cryptography`, and `textual`.
   The tested versions are the ones locked in `uv.lock` (currently
   msoffcrypto-tool 6.0.0, pikepdf 10.11.0, olefile 0.47, cryptography 50.0.0,
   lxml 6.1.1, textual 8.2.8). Older versions that the declared minimums in
-  `pyproject.toml` still allow are not tested.
+  `pyproject.toml` still allow are not tested. The locked PDF dependency path
+  uses Pillow 13.0.0.
 - A separately installed `hashcat` executable on `PATH` for `--hashcat`.
 
 ## Install
