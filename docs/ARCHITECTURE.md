@@ -10,6 +10,12 @@ Read this document for component ownership, dependency direction, runtime flows,
 and safety invariants. Exact format coverage lives in [ALPHA.md](ALPHA.md), and
 user-facing interface details live in [GUI.md](GUI.md) and [TUI.md](TUI.md).
 
+New here? Read in this order: [System context](#system-context) for what runs,
+[Components](#components-and-dependency-direction) for where code lives, then
+the three journeys: [making an editable copy](#editable-copy-transaction),
+[recovering a password](#password-recovery-and-external-processes), and
+[a graphical-interface request](#local-graphical-adapter).
+
 ## System context
 
 ```mermaid
@@ -35,6 +41,19 @@ package. The TUI and graphical interface keep recent paths in memory only. The
 static demo has no runtime connection to Dietrich, to local files, or to
 external services.
 
+Where in the code:
+
+- `dietrich` command: [src/dietrich/cli.py](../src/dietrich/cli.py)
+- `dietrich-gui`: [src/dietrich/gui/\_\_main\_\_.py](../src/dietrich/gui/__main__.py)
+- `dietrich-tui`: [src/dietrich/tui/\_\_init\_\_.py](../src/dietrich/tui/__init__.py)
+- `dietrich-research`: [src/dietrich/research/cli.py](../src/dietrich/research/cli.py)
+- Python API: [src/dietrich/\_\_init\_\_.py](../src/dietrich/__init__.py)
+- hashcat and `pdf2john` processes: [src/dietrich/external_tools.py](../src/dietrich/external_tools.py)
+- Static demo: [site/](../site/)
+
+The entry points are declared in `[project.scripts]` of
+[pyproject.toml](../pyproject.toml).
+
 ## Components and dependency direction
 
 ```mermaid
@@ -56,27 +75,31 @@ flowchart TD
     Formats --> Domain
     Formats --> Safety
     Crypto --> Domain
+    Crypto --> Safety
 ```
+
+The table doubles as a code map, ordered as a newcomer would read it: the shared
+records first, then the use cases that sequence them, then the format and
+infrastructure packages, then the adapters.
 
 | Component | Responsibility |
 | --- | --- |
-| `domain/` | Pure assessment facts, capabilities, blockers, results, and unpublished `CandidateArtifact` records |
-| `application/` | Complete use-case sequencing for assessment, password resolution, hash export, and editable-copy creation |
-| `dispatch.py` | Stable public-function facade used by interaction adapters |
-| `operation.py` | Thread-safe cancellation, phase polling, and serialized publication entry |
-| `ooxml/` | ZIP package identity, XML transforms, Office encryption, signatures, and validated candidate writing |
-| `pdf/` | PDF inspection, password and hash handling, permissions, and validated candidate writing |
-| `legacy/` | Bounded CFB access, verified BIFF/FIB transforms, and fail-closed PowerPoint inspection |
-| `crypto/` | Bounded password candidates and controlled local hashcat execution |
-| `safety/` | Bounded ZIP and CFB access, plus the sole final-publication transaction |
-| `cli.py`, `tui/`, `gui/` | Input collection and presentation, with no document policy |
-| `research/` | Experimental local OOXML mutation generator behind its own `dietrich-research` entry point, isolated from the document command |
+| [`domain/`](../src/dietrich/domain/) | Pure assessment facts, capabilities, blockers, results, and unpublished `CandidateArtifact` records |
+| [`application/`](../src/dietrich/application/) | Complete use-case sequencing for assessment, password resolution, hash export, and editable-copy creation |
+| [`dispatch.py`](../src/dietrich/dispatch.py) | Stable public-function facade used by interaction adapters |
+| [`operation.py`](../src/dietrich/operation.py) | Thread-safe cancellation, phase polling, and serialized publication entry |
+| [`ooxml/`](../src/dietrich/ooxml/) | ZIP package identity, XML transforms, Office encryption, signatures, and validated candidate writing |
+| [`pdf/`](../src/dietrich/pdf/) | PDF inspection, password and hash handling, permissions, and validated candidate writing |
+| [`legacy/`](../src/dietrich/legacy/) | Verified BIFF/FIB transforms, legacy encryption detection, and fail-closed PowerPoint handling |
+| [`crypto/`](../src/dietrich/crypto/) | Bounded password candidates, controlled local hashcat execution, and IRM detection |
+| [`safety/`](../src/dietrich/safety/) | Bounded ZIP and CFB access, plus the sole final-publication transaction |
+| [`cli.py`](../src/dietrich/cli.py), [`tui/`](../src/dietrich/tui/), [`gui/`](../src/dietrich/gui/) | Input collection and presentation, with no document policy |
+| [`research/`](../src/dietrich/research/) | Experimental local OOXML mutation generator behind its own `dietrich-research` entry point, isolated from the document command |
 
 The intended dependency direction is adapters → public facade and application →
-format modules → domain and safety. Architecture tests reject forbidden imports,
-including CLI and TUI access to implementation packages (both adapters are now
-part of the enforced dependency matrix), multiple publication owners, and format
-writers that inspect final targets.
+format modules → domain and safety. `crypto/` also uses `safety/` for bounded
+reads when it probes for IRM markers. The direction is a review rule: no test in
+this repository enforces it, so check imports when you review a change.
 
 ## Public compatibility boundary
 
@@ -108,6 +131,53 @@ backend or external tool. Presentation code reads typed results instead of
 repeating format probes or parsing human-readable notes.
 
 ## Editable-copy transaction
+
+What happens when you run `dietrich report.xlsx`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor user as Operator
+    participant cli as cli.py
+    participant app as make_editable.py
+    participant tx as ArtifactTransaction
+    participant assess as assess.py
+    participant writer as Format writer
+    user->>cli: dietrich report.xlsx
+    cli->>app: unlock_document() via dispatch.py
+    app->>app: same_file() refuses output == input
+    app->>tx: open workspace, snapshot_source()
+    tx-->>app: private snapshot path
+    app->>assess: assess_document(snapshot)
+    assess-->>app: DocumentInspection
+    opt open-password encrypted
+        app->>app: recover password, decrypt
+    end
+    app->>writer: write candidate from snapshot
+    writer-->>app: validated CandidateArtifact
+    app->>tx: commit(artifact)
+    tx->>tx: validate, write 0600 temp, publish once
+    app-->>cli: UnlockResult
+    cli-->>user: output path and removal counts
+```
+
+The CLI only parses flags into `UnlockOptions` (step 2); every decision after
+that belongs to `make_editable.py`. The format writer (step 9) is
+`write_ooxml_candidate`, `write_pdf_candidate`, or `write_legacy_candidate`,
+chosen from the assessment. It works only on the private snapshot and writes into
+the transaction workspace, so nothing reaches the target path until step 12. The
+GUI, the TUI, and the Python API enter at step 2 through the same facade, so they
+share this path. The optional step 8 is shown in detail under
+[Password recovery](#password-recovery-and-external-processes).
+
+Where in the code:
+
+- Flag parsing and output naming: [src/dietrich/cli.py](../src/dietrich/cli.py) (`_run_document_command`)
+- Public facade: [src/dietrich/dispatch.py](../src/dietrich/dispatch.py) (`unlock_document`)
+- Use case and writer routing: [src/dietrich/application/make_editable.py](../src/dietrich/application/make_editable.py) (`_make_editable_copy`, `_write_candidate`)
+- Assessment: [src/dietrich/application/assess.py](../src/dietrich/application/assess.py) (`assess_document`)
+- Writers: [ooxml/package.py](../src/dietrich/ooxml/package.py), [pdf/permissions.py](../src/dietrich/pdf/permissions.py), [legacy/binary_soft.py](../src/dietrich/legacy/binary_soft.py)
+- Snapshot and publication: [src/dietrich/safety/artifact_transaction.py](../src/dietrich/safety/artifact_transaction.py), [src/dietrich/safety/publish.py](../src/dietrich/safety/publish.py)
 
 `application.make_editable.make_editable_copy` owns the entire output-producing
 flow:
@@ -174,6 +244,53 @@ Focused legacy and signature details live in [research/](research/).
 
 ## Password recovery and external processes
 
+How an open password is found when the input is encrypted:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant app as make_editable.py
+    participant pw as passwords.py
+    participant attack as crypto/attack.py
+    participant runner as hashcat_runner.py
+    participant hc as hashcat process
+    participant verify as try_password()
+    app->>pw: recover_office_password() or recover_pdf_password()
+    alt explicit password
+        pw->>verify: check the given password
+    else wordlist, mask, or charset
+        pw->>attack: run_file_attack()
+        loop each candidate, serial or in spawn workers
+            attack->>verify: try candidate
+        end
+        attack-->>pw: AttackResult
+    else hashcat
+        pw->>runner: run_hashcat(hash line, mode)
+        runner->>hc: controlled argv, private workspace
+        hc-->>runner: outfile and potfile
+        runner-->>pw: HashcatRunResult
+        pw->>verify: verify the recovered password
+    end
+    pw-->>app: password, or PasswordNotFoundError
+```
+
+`passwords.py` picks exactly one branch from the options. `verify` is the
+format's own check: `ooxml.encryption.try_password` for Office and
+`pdf.recovery.try_password` for PDF. The local search (steps 3–5) never touches
+the document beyond verification, and it stops at the candidate ceiling. For the
+hashcat branch, `passwords.py` first exports a hash line from the existing
+assessment (`hash_export.export_assessed_hash`). It then checks hashcat's answer
+against the document (step 10), so a wrong or `$HEX[...]`-encoded result is never
+used as the password.
+
+Where in the code:
+
+- Branch selection: [src/dietrich/application/passwords.py](../src/dietrich/application/passwords.py)
+- Candidates and workers: [src/dietrich/crypto/attack.py](../src/dietrich/crypto/attack.py) (`run_file_attack`, `expand_mask`)
+- hashcat argv, output parsing, mode choice: [src/dietrich/crypto/hashcat_runner.py](../src/dietrich/crypto/hashcat_runner.py)
+- Subprocess limits: [src/dietrich/external_tools.py](../src/dietrich/external_tools.py)
+- Hash lines: [src/dietrich/application/hash_export.py](../src/dietrich/application/hash_export.py), [src/dietrich/ooxml/encryption.py](../src/dietrich/ooxml/encryption.py), [src/dietrich/pdf/hash.py](../src/dietrich/pdf/hash.py)
+
 Candidate generation is bounded by an explicit ceiling and kept separate from
 document verification. Multiple workers use explicitly owned `spawn` processes,
 with at most twice the worker count in outstanding candidates. Submission stops
@@ -228,6 +345,46 @@ identifier and phase, and cancellation waits for backend cleanup. Reloading the
 session URL can recover the current operation. Passwords are never included in
 serialized results.
 
+What happens when you press "Create working copy" in the browser:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor user as Operator
+    participant js as app.js
+    participant server as server.py
+    participant ops as OperationManager
+    participant worker as Worker thread
+    participant facade as dispatch.py
+    user->>js: Create working copy
+    js->>server: POST /api/create with X-Dietrich-Token
+    server->>server: check Host, token, Origin, options, paths
+    server->>ops: start create operation
+    ops-)worker: start thread with OperationControl
+    server-->>js: operation id, status running
+    worker->>facade: unlock_document(control)
+    loop every 200 ms while running
+        js->>server: POST /api/status
+        server-->>js: phase, then result or error
+    end
+    js-->>user: result screen
+```
+
+The request returns as soon as the operation starts (step 6); the work runs on
+its own thread and enters the same `unlock_document` path as the CLI (step 7).
+`OperationManager` allows one operation at a time, so a second start gets
+`409 Conflict`. `POST /api/cancel` asks the operation's `OperationControl` to stop;
+the browser keeps polling until backend cleanup is finished. Inspection and hash
+export use the same pattern through `/api/inspect` and `/api/export`.
+
+Where in the code:
+
+- Browser calls and polling: [src/dietrich/gui/assets/app.js](../src/dietrich/gui/assets/app.js) (`api`, `monitor`)
+- Routes and security checks: [src/dietrich/gui/server.py](../src/dietrich/gui/server.py) (`_check_api_security`, `_route_api`, `_create`)
+- Request validation: [src/dietrich/gui/options.py](../src/dietrich/gui/options.py) (`build_unlock_options`, `validate_create_paths`)
+- Background operation: [src/dietrich/gui/operations.py](../src/dietrich/gui/operations.py) (`OperationManager`)
+- Launcher and token page: [src/dietrich/gui/\_\_main\_\_.py](../src/dietrich/gui/__main__.py)
+
 The session token travels in the launch URL fragment and an explicit request
 header. Host and Origin validation constrain requests to the local session. Only
 bundled, whitelisted frontend assets are served as files; directory browsing
@@ -238,20 +395,48 @@ The session targets a trusted local operator, not shared network hosting. See
 
 ## Build and deployment boundaries
 
-Hatchling builds one source distribution and one wheel. The wheel contains
-`src/dietrich` and explicitly includes six Textual `.tcss` files plus the
-graphical adapter's assets, local fonts, and font licenses. The source
-distribution explicitly includes maintained source, tests, documentation,
-examples, brand assets, scripts, and the demo with its screenshot tour. Design
-studies and generated captures are excluded. CI separates static checks, three
-Python test versions, package installation checks, and Chromium demo validation.
-The repository has no package-publication, container, installer, or
-hosted-application workflow.
+How a change is checked and packaged:
 
-The GitHub Pages workflow is separate. It validates and uploads only the static
-demo files: the three top-level assets and the screenshot tour images. It neither
-packages the Python application nor processes documents. See
-[RELEASE.md](RELEASE.md) and [the demo guide](../site/README.md).
+```mermaid
+flowchart LR
+    trigger["Manual run or<br/>Dependabot PR"]
+    static["static job<br/>lock, Ruff, Pyright"]
+    package["package job<br/>uv build"]
+    check["check_distributions.py"]
+    demo["demo job<br/>node --check"]
+    dists[("sdist and wheel")]
+    trigger --> static
+    trigger --> package
+    trigger --> demo
+    package -->|builds| dists
+    dists -->|installs and inspects| check
+```
+
+Hatchling builds one source distribution and one wheel. The wheel contains
+`src/dietrich`, which carries the six Textual `.tcss` files plus the graphical
+adapter's assets, local fonts, and font licenses. `check_distributions.py`
+installs both artifacts and checks the four entry points and that asset set. The
+source distribution includes maintained source, documentation, examples, brand
+assets, scripts, and the demo with its screenshot tour. The test suite is kept
+local and is not shipped. Design studies and generated captures are excluded.
+
+All three CI jobs run on Ubuntu with Python 3.12, and only for a manual run or a
+Dependabot pull request. CI does not run the test suite; run `uv run pytest`
+locally before a change. The repository has no package-publication, container,
+installer, or hosted-application workflow.
+
+Where in the code:
+
+- CI jobs: [.github/workflows/ci.yml](../.github/workflows/ci.yml)
+- Build configuration: [pyproject.toml](../pyproject.toml) (`[tool.hatch.build]`)
+- Artifact checks: [scripts/check_distributions.py](../scripts/check_distributions.py)
+- Demo deployment: [.github/workflows/pages.yml](../.github/workflows/pages.yml)
+
+The GitHub Pages workflow is separate and runs only on manual dispatch. It
+validates and uploads only the static demo files: the three top-level assets and
+the screenshot tour images. It neither packages the Python application nor
+processes documents. See [RELEASE.md](RELEASE.md) and [the demo
+guide](../site/README.md).
 
 ## Extension rules
 

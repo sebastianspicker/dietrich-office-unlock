@@ -7,6 +7,8 @@ modify. It inspects protection in Microsoft Office and PDF files, removes
 supported non-cryptographic restrictions, and recovers open passwords — all
 without sending your files anywhere.
 
+_Claude was used to polish and proof-read the code and documentation of this repository._
+
 This is authorized document recovery: the operator owns the file or has explicit
 permission to modify it, and every operation runs on a local copy. That boundary
 is what makes the work lawful in the EU — see
@@ -263,6 +265,8 @@ rules, not legal advice.
 
 | Path | Purpose |
 | --- | --- |
+| `src/dietrich/cli.py` | The `dietrich` command: flag parsing and output |
+| `src/dietrich/dispatch.py` | Public facade that the CLI, GUI, TUI, and API call |
 | `src/dietrich/domain/` | Typed assessments and unpublished artifact records |
 | `src/dietrich/application/` | Assessment, recovery, hash-export, and make-editable use cases |
 | `src/dietrich/ooxml/` | OOXML inspection, encryption, signatures, and candidate writing |
@@ -272,12 +276,16 @@ rules, not legal advice.
 | `src/dietrich/safety/` | Bounded container access and the sole artifact transaction |
 | `src/dietrich/tui/` | Optional Textual adapter and packaged styles |
 | `src/dietrich/gui/` | Local graphical adapter and bundled browser assets |
+| `src/dietrich/research/` | Lab-only `dietrich-research` mutation generator |
+| `scripts/` | Benchmarks and the built-artifact check |
 | `site/` | Separately deployable static mock-data simulation |
 | `docs/SCOPE.md` | Authorized-use boundary and legal basis |
 | `docs/FRAMING.md` | Copy-paste wording for issues and AI prompts |
 
 The [architecture guide](docs/ARCHITECTURE.md) is the source of truth for
 component ownership, dependency direction, runtime flows, and safety invariants.
+Its sequence diagrams show what happens, file by file, when you unlock a
+document, recover a password, or press a button in the graphical interface.
 
 ## Development
 
