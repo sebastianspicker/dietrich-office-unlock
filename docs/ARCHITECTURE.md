@@ -112,14 +112,16 @@ repeating format probes or parsing human-readable notes.
 `application.make_editable.make_editable_copy` owns the entire output-producing
 flow:
 
-1. Create a private transaction workspace and snapshot the source once.
-2. Assess the snapshot and reject rights-managed or unsupported input.
-3. Resolve an open password and decrypt when necessary.
-4. Ask one format module to write an unpublished candidate.
-5. Require the writer to validate that candidate.
-6. Optionally re-sign and validate a second unpublished OOXML candidate.
-7. Validate the final candidate by its concrete artifact kind.
-8. Copy it to an adjacent private file and publish exactly once.
+1. Refuse a target that names the source file (same path or a link to it),
+   even with overwrite enabled; the original is never replaced.
+2. Create a private transaction workspace and snapshot the source once.
+3. Assess the snapshot and reject rights-managed or unsupported input.
+4. Resolve an open password and decrypt when necessary.
+5. Ask one format module to write an unpublished candidate.
+6. Require the writer to validate that candidate.
+7. Optionally re-sign and validate a second unpublished OOXML candidate.
+8. Validate the final candidate by its concrete artifact kind.
+9. Copy it to an adjacent private file and publish exactly once.
 
 Format writers receive source and candidate paths and return a
 `CandidateArtifact`. They never choose the final target, decide overwrite
@@ -154,7 +156,8 @@ The accepted decision is recorded in
   excessive expansion, ambiguous main parts, and signed packages unless
   stripping is explicit.
 - Bounded CFB handling limits input, directory entries, per-stream data, and
-  aggregate stream data. Mutation resolves complete storage paths and owns FAT
+  aggregate stream data. A directory tree too deep for the parser is rejected
+  as invalid input. Mutation resolves complete storage paths and owns FAT
   and MiniFAT traversal with exact-length, index, and cycle checks.
 - Office Agile metadata is validated before key work; `spinCount` values above
   1,000,000 are rejected at the shared msoffcrypto boundary.
@@ -189,7 +192,9 @@ executable fallback.
 External commands run without a shell, use private working directories, receive
 a reduced environment and closed standard input, capture bounded output, and
 write only to Dietrich-owned paths. User-provided hashcat arguments cannot
-override controlled modes or output paths. Cancellation, timeout, and output
+override controlled modes or output paths, including attached short forms
+(`-o/x`), abbreviated long forms (`--potfile-pa=x`), and masks that start with `-`.
+Cancellation, timeout, and output
 overflow terminate and reap owned processes before removing their workspaces.
 POSIX cleanup also targets the process group; Windows uses the direct-child
 fallback and does not claim descendant-tree termination there.

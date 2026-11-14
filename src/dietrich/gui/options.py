@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
 from dietrich.domain.models import UnlockOptions
+from dietrich.safety.publish import same_file
 
 _BOOL_FIELDS = {
     "remove_worksheet_protection",
@@ -34,6 +34,14 @@ class RequestValidationError(ValueError):
 
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def expand_user_path(raw: str) -> Path:
+    """Expand a leading ``~``, turning an unknown user into a validation error."""
+    try:
+        return Path(raw).expanduser()
+    except RuntimeError as exc:
+        raise RequestValidationError("path starts with ~ for an unknown user") from exc
 
 
 def build_unlock_options(value: object) -> UnlockOptions:
@@ -87,7 +95,7 @@ def _existing_file_option(name: str, raw: object) -> Path | None:
         return None
     if not isinstance(raw, str) or not raw:
         raise RequestValidationError(f"{name} must be a non-empty path string or null")
-    path = Path(raw).expanduser()
+    path = expand_user_path(raw)
     if not path.is_file():
         raise RequestValidationError(f"{name} does not identify an existing file")
     return path
@@ -100,7 +108,7 @@ def validate_create_paths(
     source = existing_source(path)
     if not isinstance(output, str) or not output:
         raise RequestValidationError("output must be a non-empty path string")
-    target = Path(output).expanduser()
+    target = expand_user_path(output)
     if source.suffix.lower() != target.suffix.lower():
         raise RequestValidationError("output suffix must match the source suffix")
     if not target.parent.is_dir():
@@ -117,7 +125,7 @@ def validate_create_paths(
 def existing_source(value: object) -> Path:
     if not isinstance(value, str) or not value:
         raise RequestValidationError("path must be a non-empty path string")
-    path = Path(value).expanduser()
+    path = expand_user_path(value)
     if not path.is_file():
         raise RequestValidationError("path does not identify an existing file")
     return path
@@ -125,12 +133,9 @@ def existing_source(value: object) -> Path:
 
 def _same_file(source: Path, target: Path) -> bool:
     try:
-        return os.path.samefile(source, target)
-    except FileNotFoundError:
-        try:
-            return source.resolve(strict=True) == target.resolve(strict=False)
-        except RuntimeError as exc:
-            raise RequestValidationError("source or output path cannot be resolved") from exc
+        return same_file(source, target)
+    except RuntimeError as exc:
+        raise RequestValidationError("source or output path cannot be resolved") from exc
 
 
 def assert_unlock_options_inventory() -> None:
@@ -153,6 +158,7 @@ assert_unlock_options_inventory()
 __all__ = [
     "RequestValidationError",
     "build_unlock_options",
+    "expand_user_path",
     "existing_source",
     "validate_create_paths",
 ]

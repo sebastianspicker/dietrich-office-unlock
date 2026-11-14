@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import zipfile
+import zlib
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -13,7 +14,11 @@ from dietrich.domain.artifacts import ArtifactKind, CandidateArtifact
 from dietrich.domain.models import DocumentFormat, RemovalCounts
 from dietrich.errors import InvalidDocumentError, MissingDependencyError
 from dietrich.operation import checkpoint
-from dietrich.safety.zip_archive import validate_archive_safety, verify_archive_crc
+from dietrich.safety.zip_archive import (
+    check_central_directory,
+    validate_archive_safety,
+    verify_archive_crc,
+)
 
 _DS_NS = "http://www.w3.org/2000/09/xmldsig#"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -142,6 +147,7 @@ def _require_matching_rsa_keys(certificate, key, *, rsa, serialization) -> None:
 def _unsigned_package_parts(package_path: Path) -> dict[str, bytes]:
     """Read every package part except a prior OOXML signature directory."""
     try:
+        check_central_directory(package_path)
         with zipfile.ZipFile(package_path) as archive:
             validate_archive_safety(archive, allow_signed=True)
             parts: dict[str, bytes] = {}
@@ -151,7 +157,7 @@ def _unsigned_package_parts(package_path: Path) -> dict[str, bytes]:
                 if not name.lower().startswith("_xmlsignatures/"):
                     parts[name] = archive.read(info)
             return parts
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, zlib.error, EOFError) as exc:
         raise InvalidDocumentError(f"cannot re-sign an invalid OOXML ZIP: {exc}") from exc
 
 
@@ -423,7 +429,7 @@ def _verify_signed_package(
             parts = {
                 info.filename.replace("\\", "/"): archive.read(info) for info in archive.infolist()
             }
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, zlib.error, EOFError) as exc:
         raise InvalidDocumentError(f"written signed package is not a valid ZIP: {exc}") from exc
 
     try:

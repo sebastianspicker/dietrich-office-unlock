@@ -9,6 +9,36 @@ can change between releases until a stable release is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- An unlock no longer replaces its own input. `--output` naming the input file (or
+  a link to it) is refused on every interface, even with `--force`.
+- PDF hash export: R4 lines carry the real `/EncryptMetadata` flag, and R5/R6
+  lines use the `pdf2john` layout (48-byte U/O, no `/Perms`). R5 now maps to
+  hashcat mode 10600.
+- Signature stripping keeps `[Content_Types].xml` `Default` entries and the
+  original XML bytes, and detects packages signed through the
+  `digital-signature/origin` relationship outside `_xmlsignatures/`.
+- `--vba` patches the PROJECT stream through its sector chain and reports only
+  changes it made. `LogGC=` and other non-verifier lines are left alone.
+- Legacy `.doc` read-only/write-reservation flags use the MS-DOC bits (0x0400,
+  0x0800); `lKey` is no longer touched. Encrypted legacy `.xls`/`.doc` files are
+  detected at inspection and never soft-patched. `.xls` files with embedded
+  charts are accepted, and `--worksheets-only` is honoured for `.xls`.
+- hashcat results in `$HEX[...]` form are decoded and verified before use; hashcat
+  error exits are reported with an output tail. `--hashcat-arg` can no longer
+  override controlled options through attached or abbreviated forms.
+- Local masks follow hashcat: `?a` is 95 printable characters, `?s` includes
+  space, `?h`/`?H` are added, and unknown tokens are rejected. A charset without
+  a maximum length searches up to length 4.
+- Malformed input (corrupt deflate members, deep CFB directory trees, oversized
+  ZIP central directories, UTF-16 XML parts, bad agile `EncryptionInfo` XML,
+  `~unknownuser` paths, missing files) gives a plain error instead of a
+  traceback or a corrupt output.
+- Publication works on filesystems without hard links and skips the directory
+  fsync on Windows. The GUI launcher no longer passes the session token on the
+  browser command line.
+
 ### Changed
 
 - Documented the authorized-use boundary and legal basis in `CLAUDE.md`,

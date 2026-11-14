@@ -10,14 +10,16 @@ from dietrich.application.assess import assess_document, enforce_operation_block
 from dietrich.domain.artifacts import ArtifactKind, CandidateArtifact
 from dietrich.domain.models import DocumentFormat, RemovalCounts, UnlockOptions, UnlockResult
 from dietrich.errors import (
+    DietrichError,
     EncryptedDocumentError,
     InvalidDocumentError,
-    MissingDependencyError,
     UnsupportedFormatError,
 )
 from dietrich.operation import checkpoint
 from dietrich.safety.artifact_transaction import ArtifactTransaction
 from dietrich.safety.bounded_io import read_file_prefix
+from dietrich.safety.cfb import CFBF_MAGIC
+from dietrich.safety.publish import same_file
 
 OOXML_FORMATS = frozenset(
     {
@@ -26,7 +28,6 @@ OOXML_FORMATS = frozenset(
         DocumentFormat.POWERPOINT_OOXML,
     }
 )
-CFBF_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def make_editable_copy(
@@ -62,6 +63,8 @@ def _make_editable_copy(
     source = Path(input_path)
     target = Path(output_path)
     options = options or UnlockOptions()
+    if same_file(source, target):
+        raise DietrichError(f"{target} is the input file; choose a different output path.")
     with ArtifactTransaction(target, overwrite=options.overwrite) as transaction:
         snapshot = transaction.snapshot_source(source)
         inspection = assess_document(snapshot)
@@ -98,7 +101,7 @@ def _validate_artifact_semantics(artifact: CandidateArtifact) -> None:
 
 
 def _write_candidate(source, inspection, options, transaction) -> CandidateArtifact:
-    if _needs_office_decryption(source, inspection.document_format):
+    if _needs_office_decryption(inspection):
         if options.soft_only:
             raise EncryptedDocumentError(
                 "Document is open-password encrypted; soft-only mode cannot decrypt it."
@@ -150,7 +153,7 @@ def _write_decrypted_office_candidate(
     if header[:2] == b"PK":
         from dietrich.ooxml.package import write_ooxml_candidate
 
-        soft_options = _soft_options(options)
+        soft_options = replace(options, overwrite=True)
         artifact = write_ooxml_candidate(
             decrypted,
             transaction.candidate_path(source.suffix or ".zip"),
@@ -185,19 +188,6 @@ def _write_decrypted_office_candidate(
     )
 
 
-def _soft_options(options: UnlockOptions) -> UnlockOptions:
-    return UnlockOptions(
-        remove_worksheet_protection=options.remove_worksheet_protection,
-        remove_workbook_protection=options.remove_workbook_protection,
-        remove_document_protection=options.remove_document_protection,
-        remove_modify_verifier=options.remove_modify_verifier,
-        remove_mark_as_final=options.remove_mark_as_final,
-        strip_signatures=options.strip_signatures,
-        unlock_vba=options.unlock_vba,
-        overwrite=True,
-    )
-
-
 def _maybe_sign(
     artifact: CandidateArtifact,
     options: UnlockOptions,
@@ -226,17 +216,14 @@ def _maybe_sign(
     )
 
 
-def _needs_office_decryption(source: Path, document_format: DocumentFormat) -> bool:
-    if document_format in OOXML_FORMATS or document_format == DocumentFormat.PDF:
+def _needs_office_decryption(inspection) -> bool:
+    """Use the assessment's encryption probe so inspection and unlock agree."""
+    if (
+        inspection.document_format in OOXML_FORMATS
+        or inspection.document_format == DocumentFormat.PDF
+    ):
         return False
-    if document_format == DocumentFormat.ENCRYPTED_OOXML:
-        return True
-    try:
-        from dietrich.ooxml.encryption import is_encrypted_office_file
-
-        return is_encrypted_office_file(source)
-    except (AttributeError, MissingDependencyError, OSError, TypeError, ValueError):
-        return False
+    return inspection.encrypted
 
 
 __all__ = ["make_editable_copy", "make_editable_workbook"]

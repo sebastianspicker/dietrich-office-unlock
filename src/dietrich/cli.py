@@ -46,6 +46,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DietrichError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except OSError as exc:
+        detail = f"{exc.strerror}: {exc.filename}" if exc.strerror and exc.filename else str(exc)
+        print(f"error: {detail}", file=sys.stderr)
+        return 2
 
 
 def _execute_parsed_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:

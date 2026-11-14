@@ -20,6 +20,7 @@ from dietrich.gui.options import (
     RequestValidationError,
     build_unlock_options,
     existing_source,
+    expand_user_path,
     validate_create_paths,
 )
 
@@ -56,7 +57,7 @@ class DietrichHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, initial_path: Path | None, *, port: int) -> None:
         self.session_token = secrets.token_urlsafe(32)
-        startup = Path(initial_path).expanduser() if initial_path is not None else None
+        startup = expand_user_path(str(initial_path)) if initial_path is not None else None
         self.operations = OperationManager(startup)
         self.assets_root = Path(__file__).with_name("assets")
         self._operations_closed = False
@@ -118,6 +119,9 @@ class DietrichRequestHandler(BaseHTTPRequestHandler):
             return
         except OperationConflictError as exc:
             self._send_error(HTTPStatus.CONFLICT, str(exc))
+            return
+        except RuntimeError as exc:  # includes RecursionError from deeply nested JSON
+            self._send_error(HTTPStatus.BAD_REQUEST, str(exc) or "request could not be processed")
             return
         self._send_json(HTTPStatus.OK, result)
 
@@ -233,7 +237,7 @@ class DietrichRequestHandler(BaseHTTPRequestHandler):
             raise RequestValidationError("path must be a non-empty path string")
         if not isinstance(kind, str) or kind not in {"file", "folder"}:
             raise RequestValidationError("kind must be 'file' or 'folder'")
-        selected = Path(raw_path).expanduser()
+        selected = expand_user_path(raw_path)
         directory = selected.parent if selected.is_file() else selected
         if not directory.is_dir():
             raise RequestValidationError("path does not identify an existing folder or file")
@@ -302,7 +306,7 @@ class DietrichRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
 
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-        content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        content = encode_json(payload)
         self.send_response(status)
         self._security_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -315,6 +319,11 @@ class DietrichRequestHandler(BaseHTTPRequestHandler):
     def _send_error(self, status: HTTPStatus, message: str) -> None:
         self.close_connection = True
         self._send_json(status, {"error": message})
+
+
+def encode_json(payload: dict[str, Any]) -> bytes:
+    """Encode a response as ASCII JSON so undecodable filename bytes cannot raise."""
+    return json.dumps(payload, separators=(",", ":")).encode()
 
 
 def _module_available(name: str) -> bool:

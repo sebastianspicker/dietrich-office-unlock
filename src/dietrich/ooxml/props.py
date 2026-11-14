@@ -25,7 +25,7 @@ def inspect_props_parts(names: list[str], read) -> list[ProtectedPart]:
             parts.append(doc_security)
     if CUSTOM_PROPS in names:
         data = read(CUSTOM_PROPS)
-        if b"MarkAsFinal" in data or b"_MarkAsFinal" in data:
+        if b"MarkAsFinal" in data:
             count = _inspect_custom_mark_as_final(data)
             if count:
                 parts.append(ProtectedPart(path=CUSTOM_PROPS, kind="MarkAsFinal", count=count))
@@ -83,7 +83,7 @@ def _clear_doc_security(data: bytes, stats: PartStats) -> bytes:
 
 def _clear_custom_mark_as_final(data: bytes, stats: PartStats) -> bytes:
     """Remove custom-property MarkAsFinal flags from parsed XML only."""
-    if b"MarkAsFinal" not in data and b"_MarkAsFinal" not in data:
+    if b"MarkAsFinal" not in data:
         return data
     try:
         return _remove_custom_properties(data, stats)

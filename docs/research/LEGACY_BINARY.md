@@ -8,7 +8,10 @@ equal-length patches. It is not a general compound-file editor.
 ## What works
 
 - Excel BIFF8 workbook protection records inside complete BOF/EOF substreams.
-- Word FIB protection fields.
+  An embedded chart substream nested in a worksheet (MS-XLS 2.1.7.20) is
+  accepted and left unchanged; any other nesting is refused.
+- Word FIB `fReadOnlyRecommended` (0x0400) and `fWriteReservation` (0x0800)
+  flag bits ([MS-DOC] 2.5.2 FibBase). Other FIB bits and `lKey` are not touched.
 - PowerPoint container inspection. Mutation is intentionally unavailable.
 
 The writer keeps the compound-file layout intact by requiring replacement bytes

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from dietrich.domain.artifacts import ArtifactKind, CandidateArtifact
 from dietrich.domain.models import DocumentFormat, RemovalCounts, UnlockOptions
-from dietrich.errors import InvalidDocumentError, UnsupportedFormatError
+from dietrich.errors import EncryptedDocumentError, InvalidDocumentError, UnsupportedFormatError
 from dietrich.operation import checkpoint
 from dietrich.safety.cfb import patch_streams, read_streams
 
@@ -25,11 +25,13 @@ _BIFF_OBJ_PROTECT = 0x0063
 _BIFF_SCEN_PROTECT = 0x00DD
 _BIFF_PROT4REV = 0x01AF
 _BIFF_PROT4REVPASS = 0x01BC
-_BIFF_SHEETPROTECTION = 0x0867  # FeatHdr related - also scan Feat
 _BIFF8_BOF = 0x0809
 _BIFF_EOF = 0x000A
+_BIFF_FILEPASS = 0x002F  # MS-XLS 2.4.117
 _BIFF_GLOBALS = 0x0005
-_BIFF8_SUBSTREAM_TYPES = {_BIFF_GLOBALS, 0x0006, 0x0010, 0x0020, 0x0040, 0x0100}
+_BIFF_WORKSHEET = 0x0010
+_BIFF_CHART = 0x0020
+_BIFF8_SUBSTREAM_TYPES = {_BIFF_GLOBALS, 0x0006, _BIFF_WORKSHEET, _BIFF_CHART, 0x0040, 0x0100}
 
 
 def write_legacy_candidate(
@@ -38,7 +40,6 @@ def write_legacy_candidate(
     options: UnlockOptions,
 ) -> CandidateArtifact:
     """Write and validate an unpublished soft-unlocked CFBF candidate."""
-    del options
     source = Path(source)
     candidate_path = Path(candidate_path)
     _require_distinct_candidate(source, candidate_path)
@@ -49,7 +50,7 @@ def write_legacy_candidate(
     except (ImportError, OSError, ValueError) as exc:
         raise InvalidDocumentError(f"{source} is not a readable OLE/CFB file: {exc}") from exc
 
-    patches, counts = _build_patches(source, streams)
+    patches, counts = _build_patches(source, streams, options)
     del streams
     checkpoint("writing legacy Office candidate")
 
@@ -89,12 +90,17 @@ def _require_distinct_candidate(source: Path, candidate_path: Path) -> None:
 
 
 def _build_patches(
-    source: Path, streams: dict[str, bytes]
+    source: Path, streams: dict[str, bytes], options: UnlockOptions
 ) -> tuple[dict[str, bytes], RemovalCounts]:
     """Dispatch a legacy Office stream set to its format-specific patcher."""
+    if legacy_streams_encrypted(streams):
+        raise EncryptedDocumentError(
+            f"{source.name}: legacy Office file is open-password encrypted; "
+            "soft rewriting would patch ciphertext."
+        )
     kind = _detect_kind(streams)
     if kind == "xls":
-        return _patch_xls_streams(source, streams)
+        return _patch_xls_streams(source, streams, options)
     if kind == "doc":
         return _patch_doc_streams(source, streams)
     if kind == "ppt":
@@ -106,16 +112,16 @@ def _build_patches(
 
 
 def _patch_xls_streams(
-    source: Path, streams: dict[str, bytes]
+    source: Path, streams: dict[str, bytes], options: UnlockOptions
 ) -> tuple[dict[str, bytes], RemovalCounts]:
-    """Patch Workbook or Book records and report worksheet protections."""
+    """Patch Workbook or Book records and report worksheet and workbook protections."""
     key = _find_stream(streams, "Workbook") or _find_stream(streams, "Book")
     if not key:
         raise UnsupportedFormatError(f"{source.name}: no Workbook stream")
-    data, count = _patch_biff_workbook(streams[key])
-    if not count:
+    data, counts = _patch_biff_workbook(streams[key], options)
+    if not counts.total:
         return {}, RemovalCounts()
-    return {key: data}, RemovalCounts(worksheet_protections=count)
+    return {key: data}, counts
 
 
 def _patch_doc_streams(
@@ -143,6 +149,46 @@ def _patch_ppt_streams(
     )
 
 
+def legacy_file_encrypted(path: Path) -> bool:
+    """Shared probe: True when a legacy .xls/.doc file carries open-password encryption."""
+    # shortcut: reads every stream (bounded by safety/cfb.py), upgrade to a single-stream read if
+    # assessment of large files becomes slow.
+    return legacy_streams_encrypted(read_streams(Path(path)))
+
+
+def legacy_streams_encrypted(streams: dict[str, bytes]) -> bool:
+    """True when Workbook globals hold FILEPASS or the Word FIB sets fEncrypted.
+
+    PowerPoint is not checked: its mutation path always refuses.
+    """
+    kind = _detect_kind(streams)
+    if kind == "xls":
+        key = _find_stream(streams, "Workbook") or _find_stream(streams, "Book")
+        return bool(key) and _biff_globals_have_filepass(streams[key])
+    if kind == "doc":
+        key = _find_stream(streams, "WordDocument")
+        data = streams[key] if key else b""
+        # MS-DOC 2.5.2 FibBase: F fEncrypted is bit 0x0100 of the flags word at 0x0A.
+        return len(data) >= 0x0C and bool(struct.unpack_from("<H", data, 0x0A)[0] & 0x0100)
+    return False
+
+
+def _biff_globals_have_filepass(data: bytes) -> bool:
+    """Scan record headers of the first (globals) substream for FILEPASS.
+
+    MS-XLS 2.2.10: record headers stay plaintext in an encrypted BIFF8 stream.
+    """
+    index = 0
+    while index + 4 <= len(data):
+        record_type, record_length = struct.unpack_from("<HH", data, index)
+        if record_type == _BIFF_FILEPASS:
+            return True
+        if record_type == _BIFF_EOF:
+            return False
+        index += 4 + record_length
+    return False
+
+
 def _detect_kind(streams: dict[str, bytes]) -> str:
     """Map CFBF streams to xls/doc/ppt kind for soft rewrite."""
     names = set(streams)
@@ -166,10 +212,12 @@ def _find_stream(streams: dict[str, bytes], short_name: str) -> str | None:
     return matches[0] if matches else None
 
 
-def _patch_biff_workbook(data: bytes) -> tuple[bytes, int]:
+def _patch_biff_workbook(data: bytes, options: UnlockOptions) -> tuple[bytes, RemovalCounts]:
     """Clear BIFF protection-related records in Workbook stream.
 
-    Returns (new_bytes, number_of_protection_records_cleared) - not byte counts.
+    Globals-substream records count as workbook protection, sheet-substream records as
+    worksheet protection, matching the OOXML workbookProtection/sheetProtection split.
+    Counts are records cleared, not bytes.
     """
     buf = bytearray(data)
     protection_lengths = {
@@ -182,15 +230,22 @@ def _patch_biff_workbook(data: bytes) -> tuple[bytes, int]:
         _BIFF_PROT4REVPASS: {2},
     }
     cleared_at: set[int] = set()
-    cleared = _walk_biff_protection_records(buf, protection_lengths, cleared_at)
-    return bytes(buf), cleared
+    sheets, books = _walk_biff_protection_records(buf, protection_lengths, cleared_at, options)
+    return bytes(buf), RemovalCounts(worksheet_protections=sheets, workbook_protections=books)
 
 
-def _walk_biff_protection_records(buf, protection_lengths, cleared_at: set[int]) -> int:
-    """Clear protection records only inside complete, supported BIFF substreams."""
-    cleared = 0
+def _walk_biff_protection_records(
+    buf, protection_lengths, cleared_at: set[int], options: UnlockOptions
+) -> tuple[int, int]:
+    """Clear protection records only inside complete, supported BIFF substreams.
+
+    Returns (worksheet_records_cleared, workbook_records_cleared).
+    """
+    sheets = 0
+    books = 0
     index = 0
-    in_substream = False
+    substream: int | None = None
+    in_chart = False
     saw_globals = False
     while index < len(buf):
         if index + 4 > len(buf):
@@ -201,29 +256,40 @@ def _walk_biff_protection_records(buf, protection_lengths, cleared_at: set[int])
             raise InvalidDocumentError("invalid BIFF record length")
         payload = bytes(buf[index + 4 : end])
         if record_type == _BIFF8_BOF:
-            if in_substream:
+            nested = _validate_biff8_bof(payload, require_globals=not saw_globals)
+            if substream is None:
+                substream = nested
+            elif substream == _BIFF_WORKSHEET and nested == _BIFF_CHART and not in_chart:
+                # MS-XLS 2.1.7.20: an embedded chart is a chart substream inside a worksheet.
+                in_chart = True
+            else:
                 raise InvalidDocumentError("nested BIFF BOF record")
-            _validate_biff8_bof(payload, require_globals=not saw_globals)
             saw_globals = True
-            in_substream = True
         elif record_type == _BIFF_EOF:
-            if not in_substream or record_length != 0:
+            if substream is None or record_length != 0:
                 raise InvalidDocumentError("invalid BIFF EOF record")
-            in_substream = False
-        elif not in_substream:
+            if in_chart:
+                in_chart = False
+            else:
+                substream = None
+        elif substream is None:
             raise InvalidDocumentError("BIFF record appears outside a BOF/EOF substream")
-        elif record_length in protection_lengths.get(record_type, set()):
-            cleared += _clear_biff_record(buf, index, record_length, cleared_at)
+        elif not in_chart and record_length in protection_lengths.get(record_type, set()):
+            if substream == _BIFF_GLOBALS:
+                if options.remove_workbook_protection:
+                    books += _clear_biff_record(buf, index, record_length, cleared_at)
+            elif options.remove_worksheet_protection:
+                sheets += _clear_biff_record(buf, index, record_length, cleared_at)
         index = end
     if not saw_globals:
         raise InvalidDocumentError("BIFF Workbook stream has no supported BOF record")
-    if in_substream:
+    if substream is not None:
         raise InvalidDocumentError("BIFF Workbook stream has no closing EOF record")
-    return cleared
+    return sheets, books
 
 
-def _validate_biff8_bof(payload: bytes, *, require_globals: bool) -> None:
-    """Require a complete BIFF8 BOF and a workbook-globals first substream."""
+def _validate_biff8_bof(payload: bytes, *, require_globals: bool) -> int:
+    """Require a complete BIFF8 BOF and a workbook-globals first substream; return its dt."""
     if len(payload) != 16:
         raise InvalidDocumentError("BIFF8 BOF payload must be exactly 16 bytes")
     version, substream_type = struct.unpack_from("<HH", payload)
@@ -235,6 +301,7 @@ def _validate_biff8_bof(payload: bytes, *, require_globals: bool) -> None:
         raise InvalidDocumentError("first BIFF substream is not workbook globals")
     if not require_globals and substream_type == _BIFF_GLOBALS:
         raise InvalidDocumentError("repeated BIFF workbook-globals substream")
+    return substream_type
 
 
 def _clear_biff_record(buf, record_start: int, record_length: int, cleared_at: set[int]) -> int:
@@ -251,23 +318,15 @@ def _clear_biff_record(buf, record_start: int, record_length: int, cleared_at: s
 
 
 def _patch_word_document(data: bytes) -> tuple[bytes, int]:
-    """Clear write-reservation / read-only recommended bits in Word FIB."""
+    """Clear the read-only-recommended and write-reservation bits in the Word FIB."""
     if len(data) < 0x20 or struct.unpack_from("<H", data, 0)[0] != 0xA5EC:
         raise InvalidDocumentError("WordDocument stream does not contain a supported FIB header")
     buf = bytearray(data)
-    cleared = 0
-    # fibBase flags at offset 0x000A (16-bit) in many nFib versions:
-    # bit 0x0004 fReadOnlyRecommended, 0x0008 fWriteReservation
-    flags_off = 0x0A
-    if flags_off + 2 <= len(buf):
-        flags = struct.unpack_from("<H", buf, flags_off)[0]
-        new_flags = flags & ~0x000C  # clear read-only recommended + write reservation
-        if new_flags != flags:
-            struct.pack_into("<H", buf, flags_off, new_flags)
-            cleared += 1
-    # lKey write reservation password hash often at 0x000E (32-bit) in fibBase
-    if 0x0E + 4 <= len(buf):
-        if struct.unpack_from("<I", buf, 0x0E)[0] != 0:
-            struct.pack_into("<I", buf, 0x0E, 0)
-            cleared += 1
-    return bytes(buf), cleared
+    # MS-DOC 2.5.2 FibBase: flags word at 0x0A; H fReadOnlyRecommended 0x0400,
+    # I fWriteReservation 0x0800. 0x0E is lKey (encryption), which is left alone.
+    flags = struct.unpack_from("<H", buf, 0x0A)[0]
+    new_flags = flags & ~0x0C00
+    if new_flags == flags:
+        return bytes(buf), 0
+    struct.pack_into("<H", buf, 0x0A, new_flags)
+    return bytes(buf), 1

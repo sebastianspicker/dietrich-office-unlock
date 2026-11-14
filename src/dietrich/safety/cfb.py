@@ -6,6 +6,9 @@ full CFB re-encoder.
 
 from __future__ import annotations
 
+import io
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,19 +25,40 @@ MAX_CFB_STREAM_BYTES = 128 * 1024 * 1024
 MAX_CFB_TOTAL_STREAM_BYTES = 256 * 1024 * 1024
 
 
+@contextmanager
+def _open_ole(source) -> Iterator[Any]:
+    """Open a compound file; olefile builds the directory tree recursively."""
+    import olefile
+
+    try:
+        with olefile.OleFileIO(source) as ole:
+            yield ole
+    except RecursionError as exc:
+        raise ValueError("CFB directory tree is too deep to process") from exc
+
+
 def read_streams(path: Path) -> dict[str, bytes]:
     """Return {stream_path: data} for all streams in an OLE file."""
-    import olefile
 
     path = Path(path)
     _require_input_size(path)
+    with _open_ole(str(path)) as ole:
+        return _read_all_streams(ole)
+
+
+def read_stream_bytes(data: bytes) -> dict[str, bytes]:
+    """Return {stream_path: data} for all streams in in-memory CFB bytes."""
+
+    _require_data_size(len(data))
+    with _open_ole(io.BytesIO(data)) as ole:
+        return _read_all_streams(ole)
+
+
+def _read_all_streams(ole) -> dict[str, bytes]:
     streams: dict[str, bytes] = {}
-    with olefile.OleFileIO(str(path)) as ole:
-        entries = _validated_stream_entries(ole)
-        for entry in entries:
-            checkpoint()
-            name = "/".join(entry)
-            streams[name] = _read_stream_limited(ole, entry)
+    for entry in _validated_stream_entries(ole):
+        checkpoint()
+        streams["/".join(entry)] = _read_stream_limited(ole, entry)
     return streams
 
 
@@ -51,7 +75,7 @@ def validate_cfb(path: Path) -> None:
     _require_input_size(path)
     if not olefile.isOleFile(str(path)):
         raise ValueError(f"{path} is not an OLE/CFB file")
-    with olefile.OleFileIO(str(path)) as ole:
+    with _open_ole(str(path)) as ole:
         _validated_stream_entries(ole)
 
 
@@ -63,13 +87,16 @@ def list_stream_names(path: Path) -> set[str]:
     _require_input_size(path)
     if not olefile.isOleFile(str(path)):
         raise ValueError(f"{path} is not an OLE/CFB file")
-    with olefile.OleFileIO(str(path)) as ole:
+    with _open_ole(str(path)) as ole:
         return {"/".join(entry) for entry in _validated_stream_entries(ole)}
 
 
 def _require_input_size(path: Path) -> None:
     """Reject compound files before an OLE parser can load oversized inputs."""
-    size = path.stat().st_size
+    _require_data_size(path.stat().st_size)
+
+
+def _require_data_size(size: int) -> None:
     if size > MAX_CFB_INPUT_BYTES:
         raise ValueError(f"CFB input exceeds the {MAX_CFB_INPUT_BYTES}-byte processing limit")
 
@@ -159,25 +186,36 @@ def patch_streams(path: Path, output_path: Path, patches: dict[str, bytes]) -> l
     Uses olefile sector chains to write stream bytes back into a full-file
     bytearray copy of the source CFB.
     """
-    import olefile
-
     path = Path(path)
     output_path = Path(output_path)
     _require_input_size(path)
     validate_cfb(path)
     with path.open("rb", buffering=0) as source:
-        data = bytearray(source.read(MAX_CFB_INPUT_BYTES + 1))
-    if len(data) > MAX_CFB_INPUT_BYTES:
-        raise ValueError("CFB input exceeds the processing limit")
+        data = source.read(MAX_CFB_INPUT_BYTES + 1)
+    patched, applied = patch_stream_bytes(data, patches)
+    if not applied:
+        raise ValueError("no matching streams to patch")
 
-    with olefile.OleFileIO(str(path)) as ole:
+    output_path.write_bytes(patched)
+    return applied
+
+
+def patch_stream_bytes(data: bytes, patches: dict[str, bytes]) -> tuple[bytes, list[str]]:
+    """Patch named streams (equal-length only) in CFB bytes through their sector chains.
+
+    Returns the patched bytes and the stream paths that were written.
+    """
+
+    _require_data_size(len(data))
+    buffer = bytearray(data)
+    with _open_ole(io.BytesIO(data)) as ole:
         applied: list[str] = []
         ole_runtime: Any = ole
         _validated_stream_entries(ole)
 
         context = _PatchContext(
             ole=ole,
-            data=data,
+            data=buffer,
             sector_size=int(ole_runtime.sectorsize),
             mini_size=int(ole_runtime.minisectorsize),
         )
@@ -195,11 +233,7 @@ def patch_streams(path: Path, output_path: Path, patches: dict[str, bytes]) -> l
 
         context.flush_mini_stream()
 
-    if not applied:
-        raise ValueError("no matching streams to patch")
-
-    output_path.write_bytes(data)
-    return applied
+    return bytes(buffer), applied
 
 
 def _flush_mini_stream(ole, data: bytearray, sector_size: int, mini_stream: bytearray) -> None:

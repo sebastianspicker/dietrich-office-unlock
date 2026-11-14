@@ -115,7 +115,11 @@ class DietrichApp(App[None]):
         self.set_interval(0.1, self._poll_operation)
         self._log("Ready · Tab to navigate · i inspect · u unlock · e export hash · q quit")
         if self._initial_path:
-            seed = Path(self._initial_path).expanduser()
+            try:
+                seed = Path(self._initial_path).expanduser()
+            except RuntimeError:
+                self._log("error: path starts with ~ for an unknown user")
+                return
             if seed.is_file():
                 self._session.remember(seed, note="opened")
                 self._refresh_recent_list()
@@ -199,11 +203,6 @@ class DietrichApp(App[None]):
                 if previous.is_mounted and not previous.disabled:
                     previous.focus()
 
-    @property
-    def is_busy(self) -> bool:
-        """Return whether a background document operation is running."""
-        return self._busy
-
     def _input_path(self) -> Path | None:
         """Return a validated existing file path, or log+show an error and return None."""
         raw = self.query_one("#input-path", Input).value
@@ -213,7 +212,14 @@ class DietrichApp(App[None]):
             self._apply_dossier(error_dossier("INPUT REQUIRED", message))
             self.query_one("#input-path", Input).focus()
             return None
-        path = Path(raw).expanduser()
+        try:
+            path = Path(raw).expanduser()
+        except RuntimeError:
+            message = "Path starts with ~ for an unknown user."
+            self._log(f"error: {message.lower()}")
+            self._apply_dossier(error_dossier("FILE NOT FOUND", message))
+            self.query_one("#input-path", Input).focus()
+            return None
         self._update_file_kind(path)
         if not path.is_file():
             message = f"File not found: {path}"
@@ -448,7 +454,14 @@ class DietrichApp(App[None]):
         if path is None:
             return
         out_raw = self.query_one("#output-path", Input).value
-        output = Path(out_raw).expanduser() if out_raw.strip() else default_output_path(path)
+        try:
+            output = Path(out_raw).expanduser() if out_raw.strip() else default_output_path(path)
+        except RuntimeError:
+            self._log("error: output path starts with ~ for an unknown user")
+            self._apply_dossier(
+                error_dossier("CHECK OPTIONS", "Output path names an unknown user.")
+            )
+            return
         built = validate_and_build(self._form_state())
         if not built.ok or built.options is None:
             self._log(f"error: {built.error}")

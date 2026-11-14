@@ -132,6 +132,8 @@ def _validate_pdf(path: Path) -> None:
 
 def _fsync_directory(directory: Path) -> None:
     """Persist the final directory entry where the platform supports it."""
+    if os.name == "nt":  # Windows cannot open a directory for fsync
+        return
     descriptor = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(descriptor)

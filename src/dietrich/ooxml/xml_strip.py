@@ -6,6 +6,7 @@ markup or namespace declarations.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pyexpat import ExpatError, ParserCreate
 from typing import Any, TypeAlias
@@ -72,6 +73,18 @@ def remove_elements_from_xml_bytes(
 
 def find_element_ranges(source: bytes, element_local_name: str, path: str) -> list[ElementRange]:
     """Return byte ranges of elements to remove."""
+    return find_matching_ranges(source, lambda name, _attrs: name == element_local_name, path)
+
+
+def find_matching_ranges(
+    source: bytes,
+    matches: Callable[[str, dict[str, str]], bool],
+    path: str,
+) -> list[ElementRange]:
+    """Return byte ranges of elements whose local name and attributes match."""
+    # The scanner splits on ASCII bytes; UTF-16/32 text would be cut mid code unit.
+    if source.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in source[:4]:
+        raise InvalidDocumentError(f"{path} is UTF-16 or UTF-32 XML; only UTF-8 can be edited.")
     try:
         ElementTree.fromstring(source)
     except (DefusedXmlException, ElementTree.ParseError) as exc:
@@ -83,15 +96,16 @@ def find_element_ranges(source: bytes, element_local_name: str, path: str) -> li
 
     def start_element(name: str, attrs: dict[str, str]) -> None:
         """Expat StartElement handler: push frame with start offset."""
-        del attrs
         start = parser.CurrentByteIndex
         frame_local_name = local_name(name)
+        target = matches(frame_local_name, attrs)
         stack.append(
             ElementFrame(
                 local_name=frame_local_name,
                 start=start,
-                start_tag_end=find_tag_end(source, start, path),
-                target=frame_local_name == element_local_name,
+                # Only removed elements need their tag end; scanning every tag is O(n) Python.
+                start_tag_end=find_tag_end(source, start, path) if target else start,
+                target=target,
             )
         )
 
@@ -102,7 +116,8 @@ def find_element_ranges(source: bytes, element_local_name: str, path: str) -> li
         if not frame.target:
             return
 
-        if parser.CurrentByteIndex == frame.start_tag_end:
+        # Expat reports `<x/>` and `<x></x>` at the same offset; only `/>` has no end tag.
+        if source[frame.start_tag_end - 2] == ord("/"):
             end = frame.start_tag_end
         else:
             end = find_tag_end(source, parser.CurrentByteIndex, path)

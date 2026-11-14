@@ -28,6 +28,8 @@ _EXPECTED_WORKER_ERRORS = (
 )
 _WORKER_GRACE_SECONDS = 0.2
 
+DEFAULT_BRUTE_MAX_LENGTH = 4
+
 CHARSETS: dict[str, str] = {
     "digits": string.digits,
     "lower": string.ascii_lowercase,
@@ -38,34 +40,42 @@ CHARSETS: dict[str, str] = {
 }
 
 
-def expand_mask(mask: str) -> Iterator[str]:
-    """Expand a simple hashcat-like mask: ?d ?l ?u ?a ?s and literals."""
-    pools: list[list[str]] = []
+_MASK_TOKENS: dict[str, str] = {
+    "d": string.digits,
+    "l": string.ascii_lowercase,
+    "u": string.ascii_uppercase,
+    "s": " " + string.punctuation,
+    "a": string.ascii_letters + string.digits + " " + string.punctuation,
+    "h": "0123456789abcdef",
+    "H": "0123456789ABCDEF",
+    "?": "?",
+}
+
+
+def _mask_pools(mask: str) -> list[str]:
+    """Split a mask into per-position alphabets; unknown ``?x`` tokens are errors."""
+    pools: list[str] = []
     i = 0
     while i < len(mask):
-        if mask[i] == "?" and i + 1 < len(mask):
-            code = mask[i + 1]
-            mapping = {
-                "d": string.digits,
-                "l": string.ascii_lowercase,
-                "u": string.ascii_uppercase,
-                "a": string.ascii_letters + string.digits,
-                "s": string.punctuation,
-            }
-            if code == "?":
-                pools.append(["?"])
-            elif code in mapping:
-                pools.append(list(mapping[code]))
-            else:
-                pools.append([code])
-            i += 2
-        else:
-            pools.append([mask[i]])
+        if mask[i] != "?":
+            pools.append(mask[i])
             i += 1
+            continue
+        token = mask[i + 1 : i + 2]
+        if token not in _MASK_TOKENS:
+            raise EncryptedDocumentError(
+                f"unsupported mask token {mask[i : i + 2]!r}; use ?d ?l ?u ?a ?s ?h ?H ??"
+            )
+        pools.append(_MASK_TOKENS[token])
+        i += 2
+    return pools
 
+
+def expand_mask(mask: str) -> Iterator[str]:
+    """Expand a hashcat-like mask: ?d ?l ?u ?a ?s ?h ?H, ?? and literals."""
+    pools = _mask_pools(mask)
     if not pools:
         return
-
     for combo in itertools.product(*pools):
         yield "".join(combo)
 
@@ -91,8 +101,9 @@ def _candidate_sources(options: AttackOptions) -> Iterator[str]:
         yield from _wordlist_candidates(Path(options.wordlist))
     if options.mask:
         yield from expand_mask(options.mask)
-    if options.charset and options.max_length is not None:
-        yield from _charset_candidates(options.charset, options.max_length)
+    if options.charset:
+        max_length = DEFAULT_BRUTE_MAX_LENGTH if options.max_length is None else options.max_length
+        yield from _charset_candidates(options.charset, max_length)
 
 
 def _wordlist_candidates(path: Path) -> Iterator[str]:

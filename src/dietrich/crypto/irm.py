@@ -6,12 +6,14 @@ Detection only - Dietrich will not fake a decrypt without a use license.
 from __future__ import annotations
 
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
 from dietrich.errors import DietrichError
 from dietrich.safety.bounded_io import read_file_prefix, read_zip_member_prefix
-from dietrich.safety.zip_archive import validate_archive_safety
+from dietrich.safety.cfb import CFBF_MAGIC
+from dietrich.safety.zip_archive import check_central_directory, validate_archive_safety
 
 
 @dataclass(frozen=True)
@@ -33,7 +35,7 @@ def detect_irm(path: Path) -> IrmInfo:
     header = read_file_prefix(path, 8)
     details: list[str] = []
 
-    if header[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+    if header[:8] == CFBF_MAGIC:
         result = _probe_ole_irm(path, details)
         if result is not None:
             return result
@@ -91,6 +93,7 @@ def _is_eul_stream(stream: str) -> bool:
 def _probe_zip_irm(path: Path, details: list[str]) -> IrmInfo | None:
     """Probe OOXML package names and custom XML for rights markers."""
     try:
+        check_central_directory(path)
         with zipfile.ZipFile(path) as archive:
             validate_archive_safety(archive, allow_signed=True)
             names = archive.namelist()
@@ -106,6 +109,8 @@ def _probe_zip_irm(path: Path, details: list[str]) -> IrmInfo | None:
         RuntimeError,
         ValueError,
         zipfile.BadZipFile,
+        zlib.error,
+        EOFError,
     ) as exc:
         details.append(f"ZIP IRM probe limited: {exc}")
         return None
@@ -135,6 +140,8 @@ def _custom_xml_rights_part(archive, names: list[str]) -> str | None:
             RuntimeError,
             ValueError,
             zipfile.BadZipFile,
+            zlib.error,
+            EOFError,
         ):
             continue
         if b"rightsmanagement" in data or b"msipc" in data:

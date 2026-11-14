@@ -141,31 +141,60 @@ def _hashcat_command(hashcat: str, options: _HashcatOptions, files: _HashcatFile
     _validate_extra_args(options.extra_args)
     command = _hashcat_base_command(hashcat, options, files)
     if options.mask:
+        _reject_option_like(options.mask)
         command.append(options.mask)
     elif options.wordlist is not None:
         command.append(_wordlist_path(options.wordlist))
+        _reject_option_like(command[-1])
     command.extend(options.extra_args)
     return command
 
 
+# hashcat parses argv with getopt_long: short options may be clustered or have attached
+# values, and long options may be abbreviated to any unique prefix.
+_CONTROLLED_SHORT = "mao"
+_VALUE_SHORT = "rjkgtdDnuTcpsl1234w"
+_CONTROLLED_LONG = (
+    "hash-type",
+    "attack-mode",
+    "outfile",
+    "outfile-format",
+    "potfile-path",
+    "session",
+    "restore",
+    "restore-file-path",
+)
+
+
+def _controlled_option(argument: str) -> str | None:
+    """Return the Dietrich-managed option an argument would set, if any."""
+    if argument == "--":
+        return "--"
+    if argument.startswith("--"):
+        name = argument[2:].split("=", maxsplit=1)[0]
+        if name and any(long.startswith(name) for long in _CONTROLLED_LONG):
+            return f"--{name}"
+        return None
+    if argument.startswith("-"):
+        for char in argument[1:]:
+            if char in _CONTROLLED_SHORT:
+                return f"-{char}"
+            if char in _VALUE_SHORT:
+                break  # the rest of the cluster is this option's value
+    return None
+
+
+def _reject_option_like(value: str) -> None:
+    """hashcat would read a leading "-" as an option, so refuse such masks and paths."""
+    if value.startswith("-"):
+        raise EncryptedDocumentError(f"hashcat mask or wordlist may not start with '-': {value}")
+
+
 def _validate_extra_args(arguments: tuple[str, ...]) -> None:
     """Prevent operator arguments from replacing Dietrich's private file controls."""
-    controlled = {
-        "-m",
-        "--hash-type",
-        "-a",
-        "--attack-mode",
-        "-o",
-        "--outfile",
-        "--outfile-format",
-        "--potfile-path",
-        "--session",
-        "--restore",
-        "--restore-file-path",
-    }
     for argument in arguments:
-        option = argument.split("=", maxsplit=1)[0]
-        if option in controlled:
+        option = _controlled_option(argument)
+        if option is not None:
             raise EncryptedDocumentError(
                 f"--hashcat-arg may not override Dietrich-managed option {option}"
             )
@@ -231,6 +260,10 @@ def _hashcat_result(
         return HashcatRunResult(
             True, password, mode, tuple(command), output, "password found via hashcat"
         )
+    # hashcat exit codes: 0 cracked, 1 exhausted; anything else is an abort or error.
+    if process.returncode not in (0, 1):
+        tail = output.replace(body, "<hash>").strip()[-400:]
+        raise EncryptedDocumentError(f"hashcat failed (exit {process.returncode}): {tail}")
     return HashcatRunResult(
         False,
         None,
@@ -258,7 +291,20 @@ def _hash_bodies_match(pot_hash: str, expected_body: str) -> bool:
 def _read_cracked_password(out_file: Path, pot: Path, hash_body: str) -> str | None:
     """Parse potfile/outfile for an exact hash body match."""
     expected = normalize_hash_body(hash_body)
-    return _outfile_password(out_file, expected) or _potfile_password(pot, expected)
+    password = _outfile_password(out_file, expected) or _potfile_password(pot, expected)
+    return None if password is None else decode_hex_password(password)
+
+
+def decode_hex_password(text: str) -> str:
+    """Decode hashcat's ``$HEX[..]`` form (non-ASCII or colon plains); UTF-8, else latin-1."""
+    match = re.fullmatch(r"\$HEX\[([0-9a-fA-F]*)\]", text)
+    if match is None or len(match.group(1)) % 2:
+        return text
+    raw = bytes.fromhex(match.group(1))
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
 
 
 def _outfile_password(out_file: Path, expected: str) -> str | None:
@@ -327,8 +373,10 @@ def suggest_mode_from_hash(hash_line: str) -> int:
         m = re.match(r"\$pdf\$(\d+)\*(\d+)\*", body)
         if m:
             r = int(m.group(2))
-            if r >= 5:
+            if r >= 6:
                 return 10700
+            if r == 5:
+                return 10600
             if r >= 3:
                 return 10500
             return 10400

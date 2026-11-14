@@ -24,7 +24,6 @@ def is_sheet_xml(name: str) -> bool:
     return any(normalized.startswith(prefix) for prefix in WORKSHEET_PREFIXES)
 
 
-# Back-compat alias
 def inspect_excel_parts(names: list[str], read) -> list[ProtectedPart]:
     """Find sheetProtection/workbookProtection parts."""
     parts: list[ProtectedPart] = []

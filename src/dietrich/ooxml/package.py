@@ -7,6 +7,7 @@ preserves ZipInfo metadata, and writes a verified unpublished candidate.
 from __future__ import annotations
 
 import zipfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +31,8 @@ from dietrich.ooxml.stats import PartStats
 from dietrich.ooxml.word import inspect_word_parts, transform_word_part
 from dietrich.operation import checkpoint
 from dietrich.safety.zip_archive import (
-    package_is_signed,
+    archive_is_signed,
+    check_central_directory,
     validate_archive_safety,
     verify_archive_crc,
 )
@@ -82,11 +84,12 @@ def inspect_ooxml_package(path: Path, *, allow_signed: bool = False) -> Document
     """List soft protections and strategies for an OOXML ZIP."""
     input_path = Path(path)
     try:
+        check_central_directory(input_path)
         with zipfile.ZipFile(input_path) as archive:
             validate_archive_safety(archive, allow_signed=allow_signed)
             names = archive.namelist()
             fmt = identify_ooxml_format(names)
-            signed = package_is_signed(names)
+            signed = archive_is_signed(archive)
             vba = any(p in names for p in VBA_PROJECT_PATHS)
 
             checkpoint()
@@ -118,7 +121,7 @@ def inspect_ooxml_package(path: Path, *, allow_signed: bool = False) -> Document
             f"{input_path} is not a valid OOXML ZIP. Corrupt files and "
             "password-encrypted Office files need the crypto path."
         ) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, zlib.error, EOFError) as exc:
         raise InvalidDocumentError(f"{input_path} could not be read: {exc}") from exc
 
 
@@ -167,7 +170,7 @@ def write_ooxml_candidate(
             f"{source_path} is not a valid OOXML ZIP. Corrupt files and "
             "password-encrypted Office files need the crypto path."
         ) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, zlib.error, EOFError) as exc:
         raise InvalidDocumentError(f"{source_path} could not be read: {exc}") from exc
 
     return CandidateArtifact(
@@ -189,6 +192,7 @@ def _rewrite_ooxml_source(
     warnings: list[str],
 ) -> tuple[DocumentFormat, bool]:
     """Rewrite one validated source archive and return its identity metadata."""
+    check_central_directory(source_path)
     with zipfile.ZipFile(source_path) as source_archive:
         validate_archive_safety(source_archive, allow_signed=options.strip_signatures)
         names = source_archive.namelist()
@@ -197,9 +201,7 @@ def _rewrite_ooxml_source(
             raise InvalidDocumentError(
                 f"{source_path} is a ZIP archive but not a supported OOXML document."
             )
-        skip_names, rewritten_parts = _signature_rewrites(
-            names, source_archive.read, options, stats, warnings
-        )
+        skip_names, rewritten_parts = _signature_rewrites(source_archive, options, stats, warnings)
         rewrite_context = ArchiveRewriteContext(
             source=source_archive,
             transformers=_transformers_for(fmt),
@@ -245,16 +247,15 @@ def validate_ooxml_identity(path: Path, expected_format: DocumentFormat) -> None
 
 
 def _signature_rewrites(
-    names: list[str],
-    read: Callable[[str], bytes],
+    archive: zipfile.ZipFile,
     options: UnlockOptions,
     stats: PartStats,
     warnings: list[str],
 ) -> tuple[set[str], dict[str, bytes]]:
     """Return signature members to omit and relationship/content-type replacements."""
-    if not options.strip_signatures or not package_is_signed(names):
+    if not options.strip_signatures or not archive_is_signed(archive):
         return set(), {}
-    skip_names, rewritten_parts = strip_signature_members(names, read)
+    skip_names, rewritten_parts = strip_signature_members(archive.namelist(), archive.read)
     stats.add("signatures", 1 if skip_names else 0)
     warnings.append(
         "Digital signatures were stripped. The output is an unsigned working copy; "
@@ -311,7 +312,6 @@ def _copy_zip_info(info: zipfile.ZipInfo) -> zipfile.ZipInfo:
     copied.create_system = info.create_system
     copied.create_version = info.create_version
     copied.extract_version = info.extract_version
-    copied.flag_bits = info.flag_bits
     copied.internal_attr = info.internal_attr
     copied.external_attr = info.external_attr
     return copied

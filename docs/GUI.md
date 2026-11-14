@@ -21,6 +21,11 @@ random session token, so keep it private: anyone who has the URL can use this
 session's file chooser and operations. Do not forward or proxy the port to
 another computer.
 
+The launcher does not pass that URL to the browser on the command line, where other
+local users could read it from the process list. It writes a private (mode 0600)
+temporary HTML page that redirects to the URL, opens that file, and removes it when
+the server stops. The URL is still printed for manual use.
+
 Press Ctrl+C in the launching terminal to stop. Active work receives a
 cooperative cancellation request, and the launcher waits for cleanup; if final
 publication has already begun, it waits for the result. Closing the tab does not

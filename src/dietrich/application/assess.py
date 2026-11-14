@@ -5,6 +5,7 @@ from __future__ import annotations
 import zipfile
 from dataclasses import replace
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 from dietrich.domain.assessment import Blocker, BlockerCode, Capability, CapabilityCode
 from dietrich.domain.models import (
@@ -21,8 +22,8 @@ from dietrich.errors import (
 )
 from dietrich.operation import checkpoint
 from dietrich.safety.bounded_io import read_file_prefix
+from dietrich.safety.cfb import CFBF_MAGIC
 
-CFBF_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 PDF_MAGIC = b"%PDF-"
 ZIP_MAGIC = b"PK\x03\x04"
 
@@ -182,7 +183,7 @@ def _cfbf_container_summary(
 ) -> tuple[DocumentFormat, bool, list[str], list[str], Blocker | None]:
     streams = _cfbf_stream_names(path)
     if streams is not None:
-        return _cfbf_stream_summary(streams)
+        return _cfbf_stream_summary(path, streams)
     return _cfbf_prefix_summary(path)
 
 
@@ -200,6 +201,7 @@ def _cfbf_stream_names(path: Path) -> set[str] | None:
 
 
 def _cfbf_stream_summary(
+    path: Path,
     streams: set[str],
 ) -> tuple[DocumentFormat, bool, list[str], list[str], Blocker | None]:
     if "EncryptionInfo" in streams or "EncryptedPackage" in streams:
@@ -212,6 +214,10 @@ def _cfbf_stream_summary(
         return DocumentFormat.ENCRYPTED_OOXML, True, strategies, [], None
     short_names = {name.rsplit("/", 1)[-1] for name in streams}
     if short_names & {"Workbook", "Book", "WordDocument"}:
+        if _legacy_encrypted(path):
+            strategies = ["crypto:legacy_password", "crypto:wordlist", "crypto:mask"]
+            note = "CFBF/OLE binary Office with legacy open-password encryption."
+            return DocumentFormat.LEGACY_CFBF, True, strategies, [note], None
         note = "CFBF/OLE binary Office: verified soft-record rewriting available."
         return DocumentFormat.LEGACY_CFBF, False, ["soft:binary_protection"], [note], None
     if "PowerPoint Document" in short_names:
@@ -225,11 +231,24 @@ def _cfbf_stream_summary(
     return DocumentFormat.LEGACY_CFBF, False, [], [detail], blocker
 
 
+def _legacy_encrypted(path: Path) -> bool:
+    from dietrich.legacy.binary_soft import legacy_file_encrypted
+
+    try:
+        return legacy_file_encrypted(path)
+    except (OSError, ValueError) as exc:
+        raise InvalidDocumentError(f"{path} is not a readable OLE/CFB file: {exc}") from exc
+
+
 def _cfbf_prefix_summary(
     path: Path,
 ) -> tuple[DocumentFormat, bool, list[str], list[str], Blocker | None]:
     blob = read_file_prefix(path, 65_536)
-    if b"EncryptionInfo" in blob or b"EncryptedPackage" in blob:
+    # CFB directory entry names are UTF-16LE (MS-CFB 2.6.1).
+    if (
+        "EncryptionInfo".encode("utf-16-le") in blob
+        or "EncryptedPackage".encode("utf-16-le") in blob
+    ):
         strategies = ["crypto:ooxml_password", "crypto:wordlist", "crypto:export_hash"]
         return DocumentFormat.ENCRYPTED_OOXML, True, strategies, [], None
     note = "CFBF detected. Install dietrich[legacy] (olefile) for richer inspection."
@@ -256,6 +275,7 @@ def _cfbf_encryption_metadata(path: Path, encrypted: bool, notes: list[str], str
     except (
         AttributeError,
         EncryptedDocumentError,
+        ExpatError,  # msoffcrypto parses agile EncryptionInfo XML with minidom
         KeyError,
         MissingDependencyError,
         OSError,

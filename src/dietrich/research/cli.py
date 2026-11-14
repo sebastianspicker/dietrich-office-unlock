@@ -8,6 +8,9 @@ fuzzing local parsers. It never touches passwords, keys, or the unlock path.
 from __future__ import annotations
 
 import argparse
+import sys
+import zipfile
+import zlib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -37,9 +40,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     seed = Path(args.input)
     out = Path(args.output) if args.output else DEFAULT_OUTPUT
-    paths = generate_xml_part_mutants(seed, out, count=args.count, seed=args.seed)
-    if not paths:
-        paths = generate_ooxml_mutants(seed, out, count=args.count, seed=args.seed)
+    try:
+        paths = generate_xml_part_mutants(seed, out, count=args.count, seed=args.seed)
+        if not paths:
+            paths = generate_ooxml_mutants(seed, out, count=args.count, seed=args.seed)
+    except (OSError, zipfile.BadZipFile, zlib.error, EOFError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print(f"Wrote {len(paths)} mutants under {out}")
     print("Lab use only: do not distribute as weaponized documents.")
     return 0

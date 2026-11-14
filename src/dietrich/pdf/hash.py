@@ -32,6 +32,7 @@ class _PdfHashFields:
     owner_hex: str
     user_hex: str
     file_id_hex: str
+    encrypt_metadata: bool
 
 
 def export_pdf_hash(path: Path, fmt: str = "hashcat") -> str:
@@ -100,6 +101,8 @@ def _pdf_hash_fields(
         owner_hex=o_hex,
         user_hex=u_hex,
         file_id_hex=file_id_hex(raw) or ("00" * 16),
+        # ISO 32000-1 Table 21: /EncryptMetadata defaults to true.
+        encrypt_metadata=encrypt.get("EncryptMetadata", "true") != "false",
     )
 
 
@@ -112,8 +115,8 @@ def _legacy_pdf_hash(revision: int, fields: _PdfHashFields) -> str:
     o_use = o_raw[:32]
     return (
         f"$pdf${fields.version or 2}*{revision}*{fields.key_bits}*"
-        f"{fields.permissions if fields.permissions is not None else 0}*0*"
-        f"{len(id_raw)}*{id_raw.hex()}*{len(u_use)}*{u_use.hex()}*{len(o_use)}*{o_use.hex()}"
+        f"{fields.permissions if fields.permissions is not None else 0}*"
+        f"{int(fields.encrypt_metadata)}*{len(id_raw)}*{id_raw.hex()}*{len(u_use)}*{u_use.hex()}*{len(o_use)}*{o_use.hex()}"
     )
 
 
@@ -126,17 +129,17 @@ def _aes256_pdf_hash(
     """Build the R5-R6 AES-256 hashcat/john field sequence."""
     oe = string_field_hex(encrypt, "OE")
     ue = string_field_hex(encrypt, "UE")
-    perms = string_field_hex(encrypt, "Perms")
-    if not (oe and ue and perms):
-        raise EncryptedDocumentError(
-            f"{path.name}: R={revision} requires /OE /UE /Perms for hash export"
-        )
+    if not (oe and ue):
+        raise EncryptedDocumentError(f"{path.name}: R={revision} requires /OE /UE for hash export")
+    id_raw = bytes.fromhex(fields.file_id_hex)
+    # Same layout as pdf2john: 48-byte U/O validation data, 32-byte UE/OE, no /Perms.
+    parts = [bytes.fromhex(fields.user_hex)[:48], bytes.fromhex(fields.owner_hex)[:48]]
+    parts += [bytes.fromhex(ue)[:32], bytes.fromhex(oe)[:32]]
+    tail = "*".join(f"{len(part)}*{part.hex()}" for part in parts)
     return (
         f"$pdf${fields.version or 5}*{revision}*256*"
-        f"{fields.permissions if fields.permissions is not None else 0}*1*"
-        f"16*{fields.file_id_hex[:32]}*127*{fields.user_hex[:254]}*"
-        f"127*{fields.owner_hex[:254]}*"
-        f"32*{ue[:64]}*32*{oe[:64]}*16*{perms[:32]}"
+        f"{fields.permissions if fields.permissions is not None else 0}*"
+        f"{int(fields.encrypt_metadata)}*{len(id_raw)}*{id_raw.hex()}*{tail}"
     )
 
 
@@ -233,6 +236,9 @@ def _pikepdf_item(pikepdf, mapping, key: str):
 def _pikepdf_scalar_fields(pikepdf, encrypt) -> dict[str, str]:
     """Extract scalar revision, permission, length, and filter fields."""
     result: dict[str, str] = {}
+    metadata = _pikepdf_item(pikepdf, encrypt, "EncryptMetadata")
+    if metadata is not None:
+        result["EncryptMetadata"] = "true" if bool(metadata) else "false"
     for key in ("R", "V", "P", "Length", "Filter"):
         value = _pikepdf_item(pikepdf, encrypt, key)
         if value is None:

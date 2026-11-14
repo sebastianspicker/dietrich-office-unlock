@@ -30,7 +30,9 @@ def recover_office_password(
             return options.password
         raise EncryptedDocumentError("provided password is incorrect.")
     if options.use_hashcat:
-        return _recover_via_hashcat(source, options, inspection=inspection)
+        return _recover_via_hashcat(
+            source, options, inspection=inspection, verifier=encryption.try_password
+        )
     if not any([options.wordlist, options.mask, options.charset]):
         raise EncryptedDocumentError(
             "Encrypted Office file requires --password, --wordlist, --mask, --brute, or --hashcat."
@@ -54,7 +56,9 @@ def recover_pdf_password(
             return options.password
         raise EncryptedDocumentError("provided PDF password is incorrect.")
     if options.use_hashcat:
-        return _recover_via_hashcat(source, options, inspection=inspection)
+        return _recover_via_hashcat(
+            source, options, inspection=inspection, verifier=recovery.try_password
+        )
     if not any([options.wordlist, options.mask, options.charset]):
         raise EncryptedDocumentError(
             "Encrypted PDF requires --password, --wordlist, --mask, --brute, or --hashcat."
@@ -106,6 +110,7 @@ def _recover_via_hashcat(
     options: UnlockOptions,
     *,
     inspection: DocumentInspection | None,
+    verifier,
 ) -> str:
     from dietrich.crypto.hashcat_runner import run_hashcat, suggest_mode_from_hash
 
@@ -131,6 +136,11 @@ def _recover_via_hashcat(
     )
     if not result.success or not result.password:
         raise PasswordNotFoundError(result.message)
+    if _verified_password(source, result.password, verifier) is None:
+        raise PasswordNotFoundError(
+            "hashcat reported a password that does not open the document; "
+            "the recovered text could not be verified."
+        )
     return result.password
 
 

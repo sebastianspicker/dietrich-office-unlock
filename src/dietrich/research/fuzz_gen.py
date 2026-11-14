@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import random
 import zipfile
+import zlib
 from pathlib import Path
 
-from dietrich.safety.zip_archive import validate_archive_safety
+from dietrich.safety.zip_archive import check_central_directory, validate_archive_safety
 
 
 def generate_ooxml_mutants(
@@ -65,7 +66,7 @@ def generate_xml_part_mutants(
 
     try:
         parts, xml_names = _read_seed_parts(seed_path)
-    except zipfile.BadZipFile:
+    except (zipfile.BadZipFile, zlib.error, EOFError):
         return generate_ooxml_mutants(seed_path, out_dir, count=count, seed=seed)
     if not xml_names:
         return generate_ooxml_mutants(seed_path, out_dir, count=count, seed=seed)
@@ -80,6 +81,7 @@ def generate_xml_part_mutants(
 
 def _read_seed_parts(seed_path: Path) -> tuple[list[tuple[zipfile.ZipInfo, bytes]], list[str]]:
     """Read a bounded seed archive once and identify its XML mutation targets."""
+    check_central_directory(seed_path)
     with zipfile.ZipFile(seed_path) as archive:
         validate_archive_safety(archive, allow_signed=True)
         parts = [(info, archive.read(info)) for info in archive.infolist()]

@@ -19,14 +19,14 @@ interaction, loopback-session, and process-lifetime boundaries are documented in
 | PowerPoint OOXML modify verifier | Supported | Can be retained with `--keep-modify-verifier` |
 | OOXML package properties | Supported | Clears recognized `DocSecurity` and parsed `MarkAsFinal` values; malformed marked custom XML is rejected |
 | Encrypted Office Agile and Standard formats | Optional | Requires `msoffcrypto-tool` and a recovered password; Agile `spinCount` is capped at 1,000,000 |
-| Legacy `.xls`, `.doc` | Limited | Verified BIFF8 record and Word FIB field patches only |
+| Legacy `.xls`, `.doc` | Limited | Verified BIFF8 record and Word FIB field patches only; encrypted input (`FILEPASS`, MS-XLS 2.4.117; `fEncrypted`, MS-DOC 2.5.2) inspects as encrypted and is never soft-patched; it goes to the open-password path. `--worksheets-only` keeps workbook-globals `PROTECT`, `WINDOWPROTECT`, and `PASSWORD` records |
 | Legacy `.ppt` | Inspection only | Mutation is rejected until a verified record parser exists |
 | PDF encryption and permissions | Optional | Requires `pikepdf` |
 | Office password hash export | Optional | Requires `msoffcrypto-tool` |
 | PDF password hash export | Limited | Standard handler revisions 2 through 6 |
-| Signed OOXML stripping | Supported | Explicit opt-in; output is unsigned |
+| Signed OOXML stripping | Supported | Explicit opt-in; output is unsigned; detects `_xmlsignatures/` parts and the `_rels/.rels` digital-signature origin relationship (System.IO.Packaging layout) |
 | OOXML re-signing | Experimental | W3C XML-DSig-valid RSA/SHA-256 subset; no complete OPC or Office compatibility claim |
-| VBA project verifier clearing | Experimental | Recognized CMG, DPB, and GC fields only |
+| VBA project verifier clearing | Experimental | Requires `olefile`; same-length edit of `CMG=`, `DPB=`, and `GC=` lines before the first section in the `PROJECT` stream (MS-OVBA §2.3.1) |
 | Microsoft Purview, Azure RMS, and IRM | Detection only | Processing is rejected |
 | OOXML mutation research | Experimental | Separate `dietrich-research` command; local byte and XML mutations; no viewer automation |
 
@@ -34,8 +34,12 @@ interaction, loopback-session, and process-lifetime boundaries are documented in
 
 Dietrich can test an explicit password, stream a wordlist, expand a mask, or
 enumerate a bounded character set. Mask tokens are `?d`, `?l`, `?u`, `?a`, `?s`,
-and `??`. `--brute` defaults to decimal digits with a maximum length of 4 unless
-other limits are provided.
+`?h`, `?H`, and `??`. `?a` is all 95 printable ASCII characters and `?s` is space
+plus punctuation, as in hashcat. Any other `?x` token, including a trailing `?`,
+is rejected. Custom charsets (`?1` to `?4`) and `?b` are not supported locally.
+`--brute` defaults to decimal digits with a maximum length of 4 unless other
+limits are provided. A charset without `--max-length` also uses a maximum length
+of 4.
 
 The default candidate ceiling is 5,000,000. Multiple workers verify through a
 spawn-based process window of at most twice the worker count. Workers are stopped
@@ -51,7 +55,10 @@ mode-`0600` file is published only after all optional post-processing succeeds.
 
 ZIP safety limits are 10,000 members, 64 MiB per member, 512 MiB total
 uncompressed content, and a 100:1 compression ratio. Duplicate and encrypted ZIP
-entries are rejected.
+entries are rejected. The entry count and a 5,000 KiB central-directory limit
+are checked from the end-of-central-directory records (including ZIP64) before
+the archive is opened. An XML part that must be edited and is stored as UTF-16
+or UTF-32 is rejected instead of rewritten.
 
 CFB safety limits are 512 MiB per input, 10,000 streams, 128 MiB per stream,
 and 256 MiB aggregate declared stream data. Legacy mutation additionally

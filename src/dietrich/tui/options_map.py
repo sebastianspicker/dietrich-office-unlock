@@ -53,14 +53,17 @@ def _path_or_none(value: str) -> Path | None:
 
 def validate_and_build(state: FormState) -> ValidationResult:
     """Validate form state and return UnlockOptions or an error string."""
-    cert = _path_or_none(state.resign_cert)
-    key = _path_or_none(state.resign_key)
+    try:
+        cert = _path_or_none(state.resign_cert)
+        key = _path_or_none(state.resign_key)
+        wordlist = _path_or_none(state.wordlist)
+    except RuntimeError:  # expanduser: "~user" names no known user
+        return ValidationResult(error="A path starts with ~ for an unknown user.")
     if (cert is None) ^ (key is None):
         return ValidationResult(
             error="Re-sign needs both certificate PEM and key PEM (or leave both empty)."
         )
 
-    wordlist = _path_or_none(state.wordlist)
     if wordlist is not None and not wordlist.is_file():
         return ValidationResult(error=f"Wordlist not found: {wordlist}")
 

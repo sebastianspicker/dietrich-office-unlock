@@ -257,14 +257,14 @@ def _parse_dict_body(body: bytes) -> dict[str, str]:
         result.setdefault(m.group(1), "/" + m.group(2))
     for m in re.finditer(r"/([A-Za-z0-9_]+)\s+(-?\d+)", text):
         result.setdefault(m.group(1), m.group(2))
+    for m in re.finditer(r"/([A-Za-z0-9_]+)\s+(true|false)\b", text):
+        result.setdefault(m.group(1), m.group(2))
     for m in re.finditer(r"/([A-Za-z0-9_]+)\s*<([0-9A-Fa-f\s]+)>", text):
         result[m.group(1)] = "<" + re.sub(r"\s+", "", m.group(2)) + ">"
-    # Only the simple literal strings used by supported handlers are accepted here.
-    for m in re.finditer(r"/([A-Za-z0-9_]+)\s\((?:\\.|[^\\)])\)", text):
-        full = m.group(0)
-        key = m.group(1)
-        val = full[full.index("(") :]
-        result[key] = val
+    for m in re.finditer(r"/([A-Za-z0-9_]+)\s*\(", text):
+        payload = _literal_payload(body, m.end() - 1)  # latin-1: text offsets equal byte offsets
+        if payload is not None:
+            result[m.group(1)] = "(" + payload.decode("latin-1") + ")"
     return result
 
 
