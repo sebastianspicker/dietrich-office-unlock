@@ -3,6 +3,13 @@
 Thanks for helping with Dietrich. Contributions should be focused, testable, and
 limited to authorized document workflows.
 
+## Before you start
+
+Read [docs/SCOPE.md](docs/SCOPE.md). Dietrich works on documents the operator
+owns or has explicit permission to modify; changes aimed at third-party files,
+rights-managed content, or DRM are out of scope. If a change needs to widen the
+boundary, update `docs/SCOPE.md` first and say why.
+
 ## Set up
 
 Install [uv](https://docs.astral.sh/uv/), then from the repository root. The
@@ -47,7 +54,9 @@ final targets or overwrite policy, and the only publisher is
 
 Do not add private, licensed, institutional, or identifying documents. Tests must
 build the smallest synthetic data they need at runtime. Do not add IRM bypasses,
-signature impersonation, document exploits, or remote password-cracking services.
+DRM circumvention, signature impersonation, document exploits, remote
+password-cracking services, or features aimed at files the operator does not own
+or have permission to modify.
 
 ## Verify
 

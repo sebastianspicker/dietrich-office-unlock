@@ -2,10 +2,12 @@
 
 ## Supported use
 
-Dietrich is intended only for documents that the operator owns or is authorized
-to modify. It removes supported document flags and performs local password
-recovery. It does not acquire or bypass Microsoft Purview, Azure RMS, or other
-server-managed rights licenses.
+Dietrich is intended only for documents that the operator owns or has explicit
+permission to modify. It removes supported document flags and performs local
+password recovery on a copy. It does not acquire or bypass Microsoft Purview,
+Azure RMS, or other server-managed rights licences, does not defeat DRM, and is
+not a service for third-party documents. The authorized-use boundary and legal
+basis are in [docs/SCOPE.md](docs/SCOPE.md).
 
 ## Report a vulnerability
 

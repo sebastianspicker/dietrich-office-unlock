@@ -11,6 +11,10 @@ can change between releases until a stable release is tagged.
 
 ### Changed
 
+- Documented the authorized-use boundary and legal basis in `CLAUDE.md`,
+  `docs/SCOPE.md`, and `docs/FRAMING.md`, and aligned `README.md`,
+  `CONTRIBUTING.md`, and `SECURITY.md` with the same wording. No behavior
+  changed.
 - Redesigned the static `site/` demo around a "shear line" concept: the
   fixture-only Instrument Workbench now reads as a local document-locksmith's
   bench, with a locked-to-open readout gauge, a spec-sheet findings list, and a

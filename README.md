@@ -7,6 +7,13 @@ modify. It inspects protection in Microsoft Office and PDF files, removes
 supported non-cryptographic restrictions, and recovers open passwords — all
 without sending your files anywhere.
 
+This is authorized document recovery: the operator owns the file or has explicit
+permission to modify it, and every operation runs on a local copy. That boundary
+is what makes the work lawful in the EU — see
+[Scope and legal basis](#scope-and-legal-basis) and [docs/SCOPE.md](docs/SCOPE.md).
+Dietrich does not acquire rights-management licences, bypass DRM/IRM, or target
+third-party documents.
+
 <details>
 <summary>Status and limitations</summary>
 
@@ -16,10 +23,11 @@ Python APIs and output formats may change. Its format-specific capabilities and
 experimental operations are a foundation to review and test against your own documents,
 rather than a ready-to-use recovery service.
 
-**Disclaimer.** Use only documents you own or are authorized to inspect and modify.
-Password-recovery and restriction-removal features grant no permission to access someone
-else's files. Keep independent originals and verify output in the intended Office or PDF
-viewer; you are responsible for its use.
+**Authorized use.** Use only documents you own or have explicit permission to
+modify. Password recovery and restriction removal grant no permission to access
+someone else's files; Dietrich is not a service for third-party documents, DRM,
+or rights-managed content. Keep independent originals and verify output in the
+intended Office or PDF viewer.
 
 </details>
 
@@ -222,6 +230,35 @@ document at a time and publishes a new file rather than editing the original.
 
 Read [SECURITY.md](SECURITY.md) for the full trust model.
 
+## Scope and legal basis
+
+Dietrich is built for an operator working on their own documents, or on
+documents they have explicit permission to modify — a lost password, an
+authorized migration, or an inherited archive they are entitled to open. The
+full boundary is in [docs/SCOPE.md](docs/SCOPE.md); copy-paste wording for
+issues and AI assistants is in [docs/FRAMING.md](docs/FRAMING.md).
+
+- **Authorized input only.** The operator owns the file or has permission to
+  modify it. Dietrich is not a service for opening other people's documents.
+- **Local by design.** No upload, remote endpoint, account, or licence server.
+  The graphical interface binds to `127.0.0.1`.
+- **No rights-management bypass.** Purview, Azure RMS, and IRM input is detected
+  and rejected; the tool does not acquire licences or defeat DRM.
+- **Ordinary editing flags and open passwords.** Worksheet, workbook, document,
+  presentation, and PDF permission flags are editing restrictions stored in the
+  file. Password recovery verifies candidates locally against a copy you
+  already hold.
+- **Copies, not edits.** The source is left untouched and a validated sibling
+  file is published.
+
+In the EU, working on a document you own or are authorized to modify rests on
+ordinary use and private copying (Art. 5(2)(b) Directive 2001/29/EC; § 53 UrhG),
+and on access to your own personal data where applicable (GDPR Art. 15 and 20).
+Format interoperability follows Art. 6 Directive 2009/24/EC and § 69d/69e UrhG.
+Dietrich does not circumvent effective technological measures under Art. 6
+Directive 2001/29/EC or § 95a UrhG. This is the project's own reading of the
+rules, not legal advice.
+
 ## Repository map
 
 | Path | Purpose |
@@ -236,6 +273,8 @@ Read [SECURITY.md](SECURITY.md) for the full trust model.
 | `src/dietrich/tui/` | Optional Textual adapter and packaged styles |
 | `src/dietrich/gui/` | Local graphical adapter and bundled browser assets |
 | `site/` | Separately deployable static mock-data simulation |
+| `docs/SCOPE.md` | Authorized-use boundary and legal basis |
+| `docs/FRAMING.md` | Copy-paste wording for issues and AI prompts |
 
 The [architecture guide](docs/ARCHITECTURE.md) is the source of truth for
 component ownership, dependency direction, runtime flows, and safety invariants.
@@ -284,7 +323,8 @@ The release gate also builds source and wheel distributions offline. See
 Work on copies of important documents. Decrypted output, unsigned copies,
 password lists, exported hashes, certificates, and private keys are all
 sensitive. Trust boundaries and vulnerability reporting live in
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md), and the authorized-use boundary in
+[docs/SCOPE.md](docs/SCOPE.md).
 
 Focused notes cover [legacy binary Office](docs/research/LEGACY_BINARY.md),
 [OOXML signatures](docs/research/SIGNATURES.md), and
